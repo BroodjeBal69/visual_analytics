@@ -68,9 +68,6 @@ st.markdown("##Patient Risk Assessment")
 
 col1, col2 = st.columns(2)
 
-# -----------------------------
-# RISK GAUGE
-# -----------------------------
 with col1:
     fig_gauge = go.Figure(go.Indicator(
         mode="gauge+number",
