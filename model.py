@@ -34,7 +34,7 @@ model.fit(X_train, y_train)
 
 st.title("Heart Disease Clinical Decision Support Tool")
 
-st.sidebar.header("🧑 Patient Profile")
+st.sidebar.header(" Patient Profile")
 
 age = st.sidebar.slider("Age", 20, 90, 50)
 chol = st.sidebar.slider("Cholesterol", 100, 400, 200)
