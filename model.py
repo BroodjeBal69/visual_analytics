@@ -8,7 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-df = pd.read_csv(r"C:\Users\spostma2\Downloads\heart\heart.csv")
+df = pd.read_csv(r"heart.csv")
 
 features = ['Age', 'Cholesterol', 'RestingBP', 'Oldpeak', 'Sex', 'ST_Slope']
 numeric_features = ['Age', 'Cholesterol', 'RestingBP', 'Oldpeak']
