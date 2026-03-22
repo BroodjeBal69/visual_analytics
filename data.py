@@ -22,8 +22,8 @@ label_map = {
     "target": "Heart Disease"
 }
 
-sex_map = {0: "Female", 1: "Male"}
-exang_map = {0: "No", 1: "Yes"}
+sex_map = {0: "Female", 1: "Male", "F": "Female", "M": "Male"}
+exang_map = {0: "No", 1: "Yes", "N": "No", "Y": "Yes"}
 fbs_map = {0: "<= 120 mg/dl", 1: "> 120 mg/dl"}
 target_map = {0: "No Disease", 1: "Disease"}
 cp_map = {
@@ -31,22 +31,41 @@ cp_map = {
     1: "Atypical Angina",
     2: "Non-anginal Pain",
     3: "Asymptomatic",
+    "TA": "Typical Angina",
+    "ATA": "Atypical Angina",
+    "NAP": "Non-anginal Pain",
+    "ASY": "Asymptomatic",
 }
 restecg_map = {
     0: "Normal",
     1: "ST-T Abnormality",
     2: "LV Hypertrophy",
+    "Normal": "Normal",
+    "ST": "ST-T Abnormality",
+    "LVH": "LV Hypertrophy",
 }
 slope_map = {
     0: "Upsloping",
     1: "Flat",
     2: "Downsloping",
+    "Up": "Upsloping",
+    "Flat": "Flat",
+    "Down": "Downsloping",
 }
 thal_map = {
     0: "Unknown",
     1: "Normal",
     2: "Fixed Defect",
     3: "Reversible Defect",
+}
+
+CATEGORICAL_ENCODERS = {
+    "sex": {"F": 0, "M": 1, 0: 0, 1: 1},
+    "cp": {"TA": 0, "ATA": 1, "NAP": 2, "ASY": 3, 0: 0, 1: 1, 2: 2, 3: 3},
+    "fbs": {0: 0, 1: 1},
+    "restecg": {"Normal": 0, "ST": 1, "LVH": 2, 0: 0, 1: 1, 2: 2},
+    "exang": {"N": 0, "Y": 1, 0: 0, 1: 1},
+    "slope": {"Up": 0, "Flat": 1, "Down": 2, 0: 0, 1: 1, 2: 2},
 }
 
 def load_data(path=DATA_PATH):

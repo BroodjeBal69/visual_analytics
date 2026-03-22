@@ -7,19 +7,30 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.inspection import permutation_importance
-from data import load_data, get_random_state
+from data import CATEGORICAL_ENCODERS, get_random_state, load_data
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
 
 try:
-    from pygam import LogisticGAM, s
+    from pygam import LogisticGAM, f, s
 except Exception:
     LogisticGAM = None
+    f = None
     s = None
 
 df = load_data()
 RANDOM_STATE = get_random_state()
+
+
+def _safe_mode(series: pd.Series, fallback: int = 0) -> int:
+    cleaned = series.dropna()
+    if cleaned.empty:
+        return fallback
+    modes = cleaned.mode()
+    if modes.empty:
+        return fallback
+    return int(modes.iloc[0])
 
 available_features = [col for col in df.columns if col != "target" and df[col].notna().any()]
 X = df[available_features].copy()
@@ -78,8 +89,16 @@ rf_importance_df = pd.DataFrame({
     "importance": perm.importances_mean
 }).sort_values("importance", ascending=False)
 
-gam_features = [feature for feature in ["age", "trestbps", "chol", "thalach", "oldpeak"] if feature in df.columns]
+gam_numeric_features = [feature for feature in ["age", "trestbps", "chol", "thalach", "oldpeak"] if feature in df.columns]
+gam_categorical_features = [feature for feature in ["sex", "cp", "fbs", "restecg", "exang", "slope"] if feature in df.columns]
+gam_features = gam_numeric_features + gam_categorical_features
 X_gam = df[gam_features].copy()
+for feature in gam_numeric_features:
+    X_gam[feature] = pd.to_numeric(X_gam[feature], errors="coerce").astype(float)
+for feature in gam_categorical_features:
+    encoded_values = X_gam[feature].map(CATEGORICAL_ENCODERS[feature])
+    mode_value = _safe_mode(encoded_values)
+    X_gam[feature] = encoded_values.fillna(mode_value).astype(int)
 Xg_train, Xg_test, yg_train, yg_test = train_test_split(
     X_gam, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
 )
@@ -87,12 +106,13 @@ Xg_train, Xg_test, yg_train, yg_test = train_test_split(
 
 def build_model_gam():
     """Return a LogisticGAM model when pygam is available."""
-    if LogisticGAM is None or s is None:
+    if LogisticGAM is None or s is None or f is None:
         return None
 
-    terms = s(0)
-    for idx in range(1, len(gam_features)):
-        terms += s(idx)
+    terms = None
+    for idx, feature in enumerate(gam_features):
+        term = s(idx) if feature in gam_numeric_features else f(idx)
+        terms = term if terms is None else terms + term
     return LogisticGAM(terms)
 
 
@@ -115,6 +135,8 @@ __all__ = [
     "available_features",
     "categorical_features",
     "numeric_features",
+    "gam_numeric_features",
+    "gam_categorical_features",
     "gam_features",
     "rf_accuracy",
     "rf_auc",
