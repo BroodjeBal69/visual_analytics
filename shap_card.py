@@ -5,6 +5,9 @@ import plotly.graph_objects as go
 from data import label_map, load_data
 from models.rf import available_features, categorical_features
 
+POSITIVE_COLOR = "#DD7C7C"
+NEGATIVE_COLOR = "#8AB7D1"
+
 
 def get_default_patient_input() -> dict:
     """Build a sensible default patient profile from the dataset."""
@@ -126,7 +129,7 @@ def make_shap_figure(model, patient_df: pd.DataFrame) -> go.Figure:
         return fig
 
     shap_df["display_value"] = shap_df["value"].astype(str)
-    colors = np.where(shap_df["shap_value"] >= 0, "#c0392b", "#1f618d")
+    colors = np.where(shap_df["shap_value"] >= 0, POSITIVE_COLOR, NEGATIVE_COLOR)
 
     fig = go.Figure(
         go.Bar(

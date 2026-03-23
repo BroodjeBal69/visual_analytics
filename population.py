@@ -18,6 +18,10 @@ from data import (
 )
 from models.rf import available_features, model_rf
 
+POSITIVE_COLOR = "#DD7C7C"
+NEGATIVE_COLOR = "#8AB7D1"
+PATIENT_COLOR = "#7f4bc4"
+
 
 data = load_data()
 DISPLAY_VALUE_MAPS = {
@@ -31,7 +35,7 @@ DISPLAY_VALUE_MAPS = {
 }
 SIMILARITY_NUMERIC_FEATURES = ["age", "trestbps", "chol", "thalach", "oldpeak"]
 SIMILARITY_CATEGORICAL_FEATURES = ["sex", "cp", "fbs", "restecg", "exang", "slope"]
-POPULATION_CONTEXT_FEATURES = ["age", "chol", "thalach"]
+POPULATION_CONTEXT_FEATURES = ["age", "trestbps", "chol", "thalach", "oldpeak"]
 SIMILAR_PATIENT_COLUMNS = [
     {"name": "Age", "id": "age"},
     {"name": "Sex", "id": "sex"},
@@ -49,23 +53,47 @@ def format_display_value(feature, value):
     return str(value)
 
 
-def build_population_distribution_figure(patient_input):
+def build_population_distribution_figure(patient_input, selected_features=None):
+    features_to_plot = selected_features or POPULATION_CONTEXT_FEATURES
+    if not features_to_plot:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Select at least one continuous variable to display.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15},
+        )
+        fig.update_layout(
+            template="plotly_white",
+            height=260,
+            margin={"l": 20, "r": 20, "t": 40, "b": 20},
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+            title="Where This Patient Sits in the Population",
+        )
+        return fig
+
     feature_titles = {
         "age": "Age Distribution",
+        "trestbps": "Resting BP Distribution",
         "chol": "Cholesterol Distribution",
         "thalach": "Max Heart Rate Distribution",
+        "oldpeak": "ST Depression Distribution",
     }
     fig = make_subplots(
         rows=1,
-        cols=len(POPULATION_CONTEXT_FEATURES),
-        subplot_titles=[feature_titles[feature] for feature in POPULATION_CONTEXT_FEATURES],
+        cols=len(features_to_plot),
+        subplot_titles=[feature_titles.get(feature, label_map.get(feature, feature.title())) for feature in features_to_plot],
     )
     risk_groups = [
-        (0, "No disease", "#6c757d"),
-        (1, "Disease", "#c0392b"),
+        (0, "No disease", NEGATIVE_COLOR),
+        (1, "Disease", POSITIVE_COLOR),
     ]
 
-    for idx, feature in enumerate(POPULATION_CONTEXT_FEATURES, start=1):
+    for idx, feature in enumerate(features_to_plot, start=1):
         for target_value, label, color in risk_groups:
             subset = data.loc[data["target"] == target_value, feature]
             fig.add_trace(
@@ -82,7 +110,7 @@ def build_population_distribution_figure(patient_input):
             )
         fig.add_vline(
             x=float(patient_input[feature]),
-            line_color="#0d6efd",
+            line_color=PATIENT_COLOR,
             line_width=3,
             row=1,
             col=idx,
@@ -101,7 +129,7 @@ def build_population_distribution_figure(patient_input):
     return fig
 
 
-def build_population_context(patient_input):
+def build_population_context(patient_input, selected_features=None):
     distance = 0
     for feature in SIMILARITY_NUMERIC_FEATURES:
         feature_std = float(data[feature].std()) or 1.0
@@ -131,7 +159,7 @@ def build_population_context(patient_input):
         for row in similar_patients.itertuples()
     ]
 
-    return summary, similar_records, build_population_distribution_figure(patient_input)
+    return summary, similar_records, build_population_distribution_figure(patient_input, selected_features)
 
 
 def make_population_summary_alert(children, component_id: str = "population-summary"):

@@ -18,6 +18,12 @@ from data import (
 )
 from models.rf import gam_categorical_features, gam_features, gam_numeric_features, model_gam
 
+POSITIVE_COLOR = "#DD7C7C"
+NEGATIVE_COLOR = "#8AB7D1"
+PATIENT_COLOR = "#7f4bc4"
+LOW_RISK_BG = "rgba(138, 183, 209, 0.18)"
+HIGH_RISK_BG = "rgba(221, 124, 124, 0.18)"
+
 
 GAM_CATEGORY_LABELS = {
     "sex": sex_map,
@@ -106,7 +112,7 @@ def predict_gam_risk(patient_df: pd.DataFrame):
     return float(model_gam.predict_proba(gam_df.to_numpy(dtype=float))[0])
 
 
-def make_gam_figure(patient_df: pd.DataFrame) -> go.Figure:
+def make_gam_figure(patient_df: pd.DataFrame, selected_features: list[str] | None = None) -> go.Figure:
     """Plot GAM partial effects with the patient's current values highlighted."""
     if model_gam is None:
         fig = go.Figure()
@@ -129,29 +135,74 @@ def make_gam_figure(patient_df: pd.DataFrame) -> go.Figure:
         return fig
 
     patient_df = _coerce_gam_dataframe(patient_df)
+    features_to_plot = [feature for feature in gam_features if selected_features is None or feature in selected_features]
+
+    if not features_to_plot:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Select at least one GAM feature to display.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15},
+        )
+        fig.update_layout(
+            title="GAM Feature Effects for Current Patient",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+            template="plotly_white",
+            height=260,
+        )
+        return fig
 
     cols = 2
-    rows = math.ceil(len(gam_features) / cols)
-    subplot_titles = [label_map.get(feature, feature.title()) for feature in gam_features]
+    rows = math.ceil(len(features_to_plot) / cols)
+    subplot_titles = [label_map.get(feature, feature.title()) for feature in features_to_plot]
     fig = make_subplots(rows=rows, cols=cols, subplot_titles=subplot_titles, vertical_spacing=0.14)
 
-    for idx, feature in enumerate(gam_features):
-        row = idx // cols + 1
-        col = idx % cols + 1
+    for plot_idx, feature in enumerate(features_to_plot):
+        row = plot_idx // cols + 1
+        col = plot_idx % cols + 1
+        term_index = gam_features.index(feature)
 
         if feature in gam_numeric_features:
-            grid = model_gam.generate_X_grid(term=idx)
-            partial_effect = model_gam.partial_dependence(term=idx, X=grid)
+            grid = model_gam.generate_X_grid(term=term_index)
+            partial_effect = model_gam.partial_dependence(term=term_index, X=grid)
             patient_value = float(patient_df.iloc[0][feature])
-            closest_idx = int(np.abs(grid[:, idx] - patient_value).argmin())
+            closest_idx = int(np.abs(grid[:, term_index] - patient_value).argmin())
             patient_effect = float(partial_effect[closest_idx])
+            y_min = float(np.min(partial_effect))
+            y_max = float(np.max(partial_effect))
+
+            if y_min < 0:
+                fig.add_hrect(
+                    y0=y_min,
+                    y1=0,
+                    fillcolor=LOW_RISK_BG,
+                    line_width=0,
+                    layer="below",
+                    row=row,
+                    col=col,
+                )
+            if y_max > 0:
+                fig.add_hrect(
+                    y0=0,
+                    y1=y_max,
+                    fillcolor=HIGH_RISK_BG,
+                    line_width=0,
+                    layer="below",
+                    row=row,
+                    col=col,
+                )
 
             fig.add_trace(
                 go.Scatter(
-                    x=grid[:, idx],
+                    x=grid[:, term_index],
                     y=partial_effect,
                     mode="lines",
-                    line={"color": "#0d6efd", "width": 2},
+                    line={"color": NEGATIVE_COLOR, "width": 2},
                     showlegend=False,
                 ),
                 row=row,
@@ -162,7 +213,10 @@ def make_gam_figure(patient_df: pd.DataFrame) -> go.Figure:
                     x=[patient_value],
                     y=[patient_effect],
                     mode="markers",
-                    marker={"color": "#dc3545", "size": 10},
+                    marker={
+                        "color": PATIENT_COLOR,
+                        "size": 10,
+                    },
                     showlegend=False,
                     hovertemplate=f"{label_map.get(feature, feature)}: %{{x:.2f}}<br>Effect: %{{y:.3f}}<extra></extra>",
                 ),
@@ -170,17 +224,52 @@ def make_gam_figure(patient_df: pd.DataFrame) -> go.Figure:
                 col=col,
             )
         else:
-            categorical_effects = _categorical_effect_frame(feature, idx)
+            categorical_effects = _categorical_effect_frame(feature, term_index)
             patient_value = patient_df.iloc[0][feature]
+            y_min = float(categorical_effects["effect"].min())
+            y_max = float(categorical_effects["effect"].max())
+
+            if y_min < 0:
+                fig.add_hrect(
+                    y0=y_min,
+                    y1=0,
+                    fillcolor=LOW_RISK_BG,
+                    line_width=0,
+                    layer="below",
+                    row=row,
+                    col=col,
+                )
+            if y_max > 0:
+                fig.add_hrect(
+                    y0=0,
+                    y1=y_max,
+                    fillcolor=HIGH_RISK_BG,
+                    line_width=0,
+                    layer="below",
+                    row=row,
+                    col=col,
+                )
+
             colors = [
-                "#dc3545" if value == patient_value else "#0d6efd"
+                POSITIVE_COLOR if effect >= 0 else NEGATIVE_COLOR
+                for effect in categorical_effects["effect"]
+            ]
+            line_widths = [
+                3 if value == patient_value else 0
+                for value in categorical_effects["value"]
+            ]
+            line_colors = [
+                PATIENT_COLOR if value == patient_value else "rgba(0,0,0,0)"
                 for value in categorical_effects["value"]
             ]
             fig.add_trace(
                 go.Bar(
                     x=categorical_effects["label"],
                     y=categorical_effects["effect"],
-                    marker_color=colors,
+                    marker={
+                        "color": colors,
+                        "line": {"color": line_colors, "width": line_widths},
+                    },
                     showlegend=False,
                     hovertemplate=f"{label_map.get(feature, feature)}: %{{x}}<br>Effect: %{{y:.3f}}<extra></extra>",
                 ),
@@ -189,12 +278,12 @@ def make_gam_figure(patient_df: pd.DataFrame) -> go.Figure:
             )
 
         fig.update_xaxes(title_text=label_map.get(feature, feature.title()), row=row, col=col)
-        fig.update_yaxes(title_text="Partial effect", row=row, col=col)
+        fig.update_yaxes(title_text="Partial effect", zeroline=True, zerolinecolor="#cfcfd4", row=row, col=col)
 
     fig.update_layout(
         title="GAM Feature Effects for Current Patient",
         template="plotly_white",
-        height=260 * rows,
+        height=200 * rows,
         margin={"l": 20, "r": 20, "t": 60, "b": 20},
     )
     return fig

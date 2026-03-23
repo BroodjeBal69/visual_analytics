@@ -17,7 +17,7 @@ CATEGORICAL_BADGE_LABELS = {
     "slope": slope_map,
 }
 
-
+# # ===== Parallel Coordinates Plot Feature Badges =====
 def slider_marks(data, column_name):
     min_value = float(data[column_name].min())
     max_value = float(data[column_name].max())
@@ -30,32 +30,57 @@ def slider_marks(data, column_name):
         max_value: format_value(max_value),
     }
 
-
 def badge_class(is_selected, extra_class=""):
     color_class = "bg-primary" if is_selected else "bg-secondary"
     suffix = f" {extra_class}" if extra_class else ""
     return f"badge rounded-pill {color_class}{suffix}"
 
+# # ===== Reusable Badge Selectors =====
+def render_categorical_badges(
+    data=None,
+    default_patient_input=None,
+    field_name=None,
+    values=None,
+    label_map=None,
+    default_value=None,
+    store_id=None,
+    multi=False,
+):
+    if field_name is None:
+        raise ValueError("field_name is required")
 
-def render_categorical_badges(data, default_patient_input, field_name):
-    label_map = CATEGORICAL_BADGE_LABELS[field_name]
-    default_value = default_patient_input[field_name]
-    values = sorted(data[field_name].dropna().unique().tolist())
+    if values is None:
+        if data is None:
+            raise ValueError("data is required when values is not provided")
+        values = sorted(data[field_name].dropna().unique().tolist())
+
+    if label_map is None:
+        label_map = CATEGORICAL_BADGE_LABELS.get(field_name, {})
+
+    if default_value is None:
+        if default_patient_input is None:
+            raise ValueError("default_patient_input is required when default_value is not provided")
+        default_value = default_patient_input[field_name]
+
+    if store_id is None:
+        store_id = f"input-{field_name}"
+
     badges = []
     for value in values:
+        is_selected = value in default_value if multi else value == default_value
         badges.append(
             html.Span(
                 label_map.get(value, str(value)),
                 id={"type": f"{field_name}-badge", "value": value},
                 n_clicks=0,
-                className=badge_class(value == default_value, "me-2 mb-2"),
+                className=badge_class(is_selected, "me-2 mb-2"),
                 style={"cursor": "pointer"},
             )
         )
-    badges.append(dcc.Store(id=f"input-{field_name}", data=default_value))
+    badges.append(dcc.Store(id=store_id, data=default_value))
     return html.Div(badges)
 
-
+# ===== Patient Input Panel =====
 def build_patient_input_panel(data, default_patient_input):
     return dbc.Col([
         html.H4("Patient Input", className="mb-4"),
