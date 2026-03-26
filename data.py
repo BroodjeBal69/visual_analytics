@@ -17,8 +17,6 @@ label_map = {
     "exang": "Exercise Angina",
     "oldpeak": "ST Depression",
     "slope": "ST Slope",
-    "ca": "Major Vessels",
-    "thal": "Thalassemia",
     "target": "Heart Disease"
 }
 
@@ -87,11 +85,6 @@ def load_data(path=DATA_PATH):
         'heartdisease': 'target',
     })
 
-    # Add missing columns 
-    for col in ['ca', 'thal']:
-        if col not in df.columns:
-            df[col] = np.nan
-
     return df
 
 def get_display_data():
@@ -105,7 +98,8 @@ def get_display_data():
     display_df["cp_label"] = display_df["cp"].map(cp_map).fillna(display_df["cp"].astype(str))
     display_df["restecg_label"] = display_df["restecg"].map(restecg_map).fillna(display_df["restecg"].astype(str))
     display_df["slope_label"] = display_df["slope"].map(slope_map).fillna(display_df["slope"].astype(str))
-    display_df["thal_label"] = display_df["thal"].map(thal_map).fillna(display_df["thal"].astype(str))
+    if "thal" in display_df.columns:
+        display_df["thal_label"] = display_df["thal"].map(thal_map).fillna(display_df["thal"].astype(str))
 
     return display_df
 

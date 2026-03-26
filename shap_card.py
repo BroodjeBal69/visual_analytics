@@ -4,9 +4,7 @@ import plotly.graph_objects as go
 
 from data import label_map, load_data
 from models.rf import available_features, categorical_features
-
-POSITIVE_COLOR = "#DD7C7C"
-NEGATIVE_COLOR = "#8AB7D1"
+from palette import NEGATIVE_COLOR, NEUTRAL_LINE_COLOR, POSITIVE_COLOR
 
 
 def get_default_patient_input() -> dict:
@@ -141,7 +139,7 @@ def make_shap_figure(model, patient_df: pd.DataFrame) -> go.Figure:
             hovertemplate="%{y}<br>Contribution: %{x:.4f}<br>Input: %{customdata[0]}<extra></extra>",
         )
     )
-    fig.add_vline(x=0, line_dash="dash", line_color="#6c757d")
+    fig.add_vline(x=0, line_dash="dash", line_color=NEUTRAL_LINE_COLOR)
     fig.update_layout(
         title=f"SHAP Contributions for Predicted Risk {probability:.1%}",
         xaxis_title="Impact on model output",

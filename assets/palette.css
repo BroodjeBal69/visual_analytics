@@ -1,0 +1,11 @@
+:root {
+  --positive-color: #E7A4A4;
+  --negative-color: #95C1DB;
+  --patient-color: #C3A8E5;
+  --deemphasis-grey: #B8B8B8;
+
+  --chart-accent-positive: var(--positive-color);
+  --chart-accent-negative: var(--negative-color);
+  --chart-accent-selected: var(--patient-color);
+  --chart-accent-muted: var(--deemphasis-grey);
+}

@@ -1,6 +1,7 @@
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import html
+from palette import DIVERGING_COLOR_SCALE
 
 
 FEATURE_OPTIONS = {
@@ -73,7 +74,7 @@ def render_pcp(data, selected_features, age_range, target_values):
             'exang': 'Exercise Angina',
             'target': 'Heart Disease',
         },
-        color_continuous_scale=px.colors.diverging.Tealrose,
+        color_continuous_scale=DIVERGING_COLOR_SCALE,
         color_continuous_midpoint=0.5,
     )
 

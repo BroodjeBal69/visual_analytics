@@ -9,7 +9,16 @@ from mlxtend.frequent_patterns import apriori, association_rules
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from data import cp_map, exang_map, fbs_map, load_data, restecg_map, slope_map, target_map, thal_map
+from data import cp_map, exang_map, fbs_map, restecg_map, slope_map, target_map
+from models.rf import X_train, y_train
+from palette import (
+    DISEASE_COLOR_MAP,
+    DIVERGING_COLOR_SCALE,
+    NEGATIVE_COLOR,
+    NEUTRAL_TEXT_COLOR,
+    PATIENT_COLOR,
+    POSITIVE_COLOR,
+)
 
 
 AGE_BINS = [-math.inf, 45, 55, 65, math.inf]
@@ -35,11 +44,11 @@ RULE_FEATURE_COLUMNS = [
     "exang",
     "oldpeak_bin",
     "slope",
-    "thal",
-    "ca",
     "target",
 ]
 PLOT_RULE_LIMIT = 100
+RULE_FIG_MIN_HEIGHT = 400
+RULE_FIG_MAX_HEIGHT = 1000
 
 ITEM_LABELS = {
     "target=1": "heart disease",
@@ -53,7 +62,6 @@ VALUE_LABEL_MAPS = {
     "restecg": restecg_map,
     "exang": exang_map,
     "slope": slope_map,
-    "thal": thal_map,
     "target": target_map,
 }
 
@@ -69,10 +77,17 @@ FEATURE_LABELS = {
     "exang": "exercise angina",
     "oldpeak_bin": "ST depression",
     "slope": "ST slope",
-    "thal": "thalassemia",
-    "ca": "major vessels",
     "target": "heart disease",
 }
+
+
+def _build_train_rule_source_df() -> pd.DataFrame:
+    train_df = X_train.copy()
+    train_df["target"] = y_train
+    return train_df.reset_index(drop=True)
+
+
+TRAIN_RULE_SOURCE_DF = _build_train_rule_source_df()
 
 
 def _cut_value(value, bins, labels) -> str:
@@ -109,7 +124,7 @@ def discretize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     discretized["thalach_bin"] = discretized["thalach"].apply(bin_thalach)
     discretized["oldpeak_bin"] = discretized["oldpeak"].apply(bin_oldpeak)
 
-    for feature in ["sex", "cp", "fbs", "restecg", "exang", "slope", "thal", "ca", "target"]:
+    for feature in ["sex", "cp", "fbs", "restecg", "exang", "slope", "target"]:
         if feature in discretized.columns:
             discretized[feature] = discretized[feature].astype(str)
 
@@ -117,7 +132,7 @@ def discretize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_rule_dataset(df: pd.DataFrame | None = None) -> pd.DataFrame:
-    source_df = load_data() if df is None else df.copy()
+    source_df = TRAIN_RULE_SOURCE_DF if df is None else df.copy()
     return discretize_dataframe(source_df)
 
 
@@ -152,23 +167,62 @@ def build_plot_rules(rules_df: pd.DataFrame | None = None, limit: int = PLOT_RUL
     if active_rules.empty:
         return active_rules
 
-    plot_rules = active_rules.copy()
-    plot_rules["rule_len"] = plot_rules["antecedents"].apply(len)
-    plot_rules = plot_rules[
-        (plot_rules["lift"] > 1.0) &
-        (plot_rules["confidence"] >= 0.75) &
-        (plot_rules["rule_len"] <= 3)
+    ranked_rules = active_rules.copy()
+    ranked_rules["rule_len"] = ranked_rules["antecedents"].apply(len)
+
+    plot_rules = ranked_rules[
+        (ranked_rules["lift"] > 1.0) &
+        (ranked_rules["confidence"] >= 0.75) &
+        (ranked_rules["rule_len"] <= 3)
     ].copy()
 
     if plot_rules.empty:
-        plot_rules = active_rules.copy()
-        plot_rules["rule_len"] = plot_rules["antecedents"].apply(len)
+        plot_rules = ranked_rules.copy()
 
-    plot_rules = plot_rules.sort_values(
+    # Guarantee both outcomes are represented when available in the source rules.
+    for outcome in (["target=1"], ["target=0"]):
+        has_outcome = plot_rules["consequents"].apply(lambda items: items == outcome).any()
+        if has_outcome:
+            continue
+        fallback = ranked_rules[ranked_rules["consequents"].apply(lambda items: items == outcome)]
+        if not fallback.empty:
+            plot_rules = pd.concat([plot_rules, fallback.head(10)], ignore_index=True)
+
+    plot_rules = (
+        plot_rules
+        .assign(
+            _ante_key=plot_rules["antecedents"].apply(tuple),
+            _cons_key=plot_rules["consequents"].apply(tuple),
+        )
+        .drop_duplicates(subset=["_ante_key", "_cons_key", "support", "confidence", "lift"])
+        .drop(columns=["_ante_key", "_cons_key"])
+    )
+
+    sorted_rules = plot_rules.sort_values(
         by=["lift", "confidence", "support"],
         ascending=False,
-    ).head(limit)
-    return plot_rules.reset_index(drop=True)
+    )
+
+    if limit <= 0:
+        return sorted_rules.head(0).reset_index(drop=True)
+
+    positive_sorted = sorted_rules[sorted_rules["consequents"].apply(lambda items: items == ["target=1"])]
+    negative_sorted = sorted_rules[sorted_rules["consequents"].apply(lambda items: items == ["target=0"])]
+
+    if positive_sorted.empty or negative_sorted.empty:
+        return sorted_rules.head(limit).reset_index(drop=True)
+
+    quota = max(1, limit // 2)
+    balanced = pd.concat([
+        positive_sorted.head(quota),
+        negative_sorted.head(quota),
+    ])
+
+    if len(balanced) < limit:
+        remainder = sorted_rules.loc[~sorted_rules.index.isin(balanced.index)].head(limit - len(balanced))
+        balanced = pd.concat([balanced, remainder])
+
+    return balanced.head(limit).reset_index(drop=True)
 
 
 PLOT_RULES_DF = build_plot_rules(RULES_DF)
@@ -198,8 +252,6 @@ def discretize_patient(patient_dict: dict) -> dict:
         "exang": str(patient_dict.get("exang")),
         "oldpeak_bin": bin_oldpeak(patient_dict.get("oldpeak")),
         "slope": str(patient_dict.get("slope")),
-        "thal": str(patient_dict.get("thal")),
-        "ca": str(patient_dict.get("ca")),
     }
 
 
@@ -216,8 +268,6 @@ def patient_to_items(patient_dict: dict) -> set[str]:
         f"exang={patient_dict['exang']}",
         f"oldpeak_bin={patient_dict['oldpeak_bin']}",
         f"slope={patient_dict['slope']}",
-        f"thal={patient_dict['thal']}",
-        f"ca={patient_dict['ca']}",
     }
 
 
@@ -269,12 +319,32 @@ def rule_to_text(row: pd.Series) -> dict:
     conditions = [humanize_item(item) for item in row["antecedents"]]
     outcome = humanize_item(row["consequents"][0])
     return {
+        "conditions": conditions,
         "if_text": " and ".join(conditions),
         "then_text": outcome,
         "confidence": float(row["confidence"]),
         "lift": float(row["lift"]),
         "support": float(row["support"]),
     }
+
+
+def _build_rule_sentence(rule: dict):
+    parts = [
+        html.Span("IF", className="badge text-bg-primary me-2"),
+    ]
+
+    for idx, condition in enumerate(rule["conditions"]):
+        parts.append(html.Span(condition, className="me-1 fw-semibold"))
+        if idx < len(rule["conditions"]) - 1:
+            parts.append(html.Span("AND", className="badge text-bg-secondary mx-2"))
+
+    parts.extend(
+        [
+            html.Span("THEN", className="badge text-bg-info ms-2 me-2"),
+            html.Span(rule["then_text"], className="fw-semibold text-info-emphasis"),
+        ]
+    )
+    return html.Div(parts, className="mb-2")
 
 
 def build_rule_detail_card(row: pd.Series, label: str | None = None):
@@ -284,7 +354,7 @@ def build_rule_detail_card(row: pd.Series, label: str | None = None):
         dbc.CardBody(
             [
                 html.H6(title, className="card-title"),
-                html.P(f"If {rule['if_text']}, then {rule['then_text']}.", className="mb-2"),
+                _build_rule_sentence(rule),
                 html.Small(
                     f"Support: {rule['support']:.2f} | "
                     f"Confidence: {rule['confidence']:.2f} | "
@@ -314,7 +384,7 @@ def build_rule_cards(ranked_rules: pd.DataFrame, top_n: int = 3):
                 dbc.CardBody(
                     [
                         html.H6(f"Rule {index}", className="card-title"),
-                        html.P(f"If {rule['if_text']}, then {rule['then_text']}."),
+                        _build_rule_sentence(rule),
                         html.Small(
                             f"Confidence: {rule['confidence']:.2f} | "
                             f"Lift: {rule['lift']:.2f} | "
@@ -347,7 +417,7 @@ def build_selected_rule_details(rules_df: pd.DataFrame, selected_indices: list[i
                 dbc.CardBody(
                     [
                         html.H6(f"Rule {rule_index + 1}", className="card-title"),
-                        html.P(f"If {rule['if_text']}, then {rule['then_text']}.", className="mb-2"),
+                        _build_rule_sentence(rule),
                         html.Small(
                             f"Support: {rule['support']:.2f} | "
                             f"Confidence: {rule['confidence']:.2f} | "
@@ -432,7 +502,7 @@ def make_rules_lollipop_figure(rules_df: pd.DataFrame | None = None, limit: int 
             x1=float(lift_value),
             y0=y_value,
             y1=y_value,
-            line={"color": "#8AB7D1", "width": 2},
+            line={"color": NEGATIVE_COLOR, "width": 2},
         )
 
     fig.add_trace(
@@ -440,7 +510,7 @@ def make_rules_lollipop_figure(rules_df: pd.DataFrame | None = None, limit: int 
             x=top_rules["lift"],
             y=labels,
             mode="markers",
-            marker={"size": 12, "color": "#DD7C7C"},
+            marker={"size": 12, "color": POSITIVE_COLOR},
             text=hover_text,
             hovertemplate="%{text}<extra></extra>",
             showlegend=False,
@@ -449,7 +519,7 @@ def make_rules_lollipop_figure(rules_df: pd.DataFrame | None = None, limit: int 
     fig.update_layout(
         title="Rule Lift Overview",
         template="plotly_white",
-        height=max(320, 28 * len(top_rules) + 100),
+        height=min(RULE_FIG_MAX_HEIGHT, max(RULE_FIG_MIN_HEIGHT, 28 * len(top_rules) + 100)),
         margin={"l": 90, "r": 20, "t": 50, "b": 30},
         xaxis_title="Lift",
         yaxis_title="",
@@ -462,7 +532,17 @@ def _feature_from_item(item: str) -> str:
 
 
 def _matrix_row_label(item: str, collapse_rows: bool) -> str:
-    return FEATURE_LABELS.get(_feature_from_item(item), _feature_from_item(item)) if collapse_rows else humanize_item(item)
+    if not collapse_rows:
+        return humanize_item(item)
+    if str(item).startswith("target="):
+        return humanize_item(item)
+    return FEATURE_LABELS.get(_feature_from_item(item), _feature_from_item(item))
+
+
+def _is_outcome_row_record(record: dict) -> bool:
+    key = str(record.get("key", ""))
+    feature = str(record.get("feature", ""))
+    return key.startswith("target=") or feature == FEATURE_LABELS.get("target", "target")
 
 
 def get_matrix_rules(
@@ -480,8 +560,28 @@ def get_matrix_rules(
     sortable = sortable.sort_values(
         by=[sort_column, "lift", "confidence", "support"],
         ascending=False,
-    ).head(top_n)
-    return sortable.reset_index(drop=True)
+    )
+
+    if top_n <= 0:
+        return sortable.head(0).reset_index(drop=True)
+
+    # Keep both outcomes visible by selecting a balanced subset when possible.
+    positive_rules = sortable[sortable["consequents"].apply(lambda items: items == ["target=1"])]
+    negative_rules = sortable[sortable["consequents"].apply(lambda items: items == ["target=0"])]
+
+    quota = max(1, top_n // 2)
+    selected = pd.concat(
+        [
+            positive_rules.head(quota),
+            negative_rules.head(quota),
+        ]
+    )
+
+    if len(selected) < top_n:
+        remainder = sortable.loc[~sortable.index.isin(selected.index)].head(top_n - len(selected))
+        selected = pd.concat([selected, remainder])
+
+    return selected.head(top_n).reset_index(drop=True)
 
 
 def make_rule_matrix_figure(
@@ -574,6 +674,10 @@ def make_rule_matrix_figure(
     else:
         row_records = [{**record, "is_header": False} for record in row_records]
 
+    non_outcome_rows = [record for record in row_records if not _is_outcome_row_record(record)]
+    outcome_rows = [record for record in row_records if _is_outcome_row_record(record)]
+    row_records = non_outcome_rows + outcome_rows
+
     y_positions = {
         record["key"]: len(row_records) - idx - 1
         for idx, record in enumerate(row_records)
@@ -598,14 +702,14 @@ def make_rule_matrix_figure(
             x=[-(record["count"] / max_count) if max_count else 0 for record in row_records],
             y=[len(row_records) - idx - 1 for idx in range(len(row_records))],
             orientation="h",
-            marker_color=["rgba(0,0,0,0)" if record["is_header"] else "#8AB7D1" for record in row_records],
+            marker_color=["rgba(0,0,0,0)" if record["is_header"] else NEGATIVE_COLOR for record in row_records],
             customdata=[
                 ["header", record["feature"]] if record["is_header"] else ["item", record["key"]]
                 for record in row_records
             ],
             hovertemplate="%{customdata[1]}<br>%{text} matching rules<extra></extra>",
             text=[record["count"] for record in row_records],
-            textfont={"size": 9, "color": "#5c5c5c"},
+            textfont={"size": 9, "color": NEUTRAL_TEXT_COLOR},
             showlegend=False,
         ),
         row=1,
@@ -617,34 +721,32 @@ def make_rule_matrix_figure(
     antecedent_text = []
     antecedent_customdata = []
     consequent_points = {
-        "target=1": {"x": [], "y": [], "text": [], "customdata": [], "name": "Heart disease", "color": "#DD7C7C"},
-        "target=0": {"x": [], "y": [], "text": [], "customdata": [], "name": "No heart disease", "color": "#8AB7D1"},
+        "target=1": {"x": [], "y": [], "text": [], "customdata": [], "name": "Heart disease", "color": DISEASE_COLOR_MAP["Heart disease"]},
+        "target=0": {"x": [], "y": [], "text": [], "customdata": [], "name": "No heart disease", "color": DISEASE_COLOR_MAP["No heart disease"]},
     }
 
     for col_index, row in enumerate(plot_rules.itertuples(), start=1):
+        row_text = rule_to_text(pd.Series(row._asdict()))
+        hover_text = (
+            f"Rule {col_index}<br>If {row_text['if_text']}<br>"
+            f"Then {row_text['then_text']}<br>"
+            f"Lift: {row.lift:.2f}<br>Confidence: {row.confidence:.2f}"
+        )
         for item in row.antecedents:
             key = _feature_from_item(item) if collapse_rows else item
             antecedent_x.append(col_index)
             antecedent_y.append(y_positions[key])
-            antecedent_text.append(
-                f"Rule {col_index}<br>If {rule_to_text(pd.Series(row._asdict()))['if_text']}<br>"
-                f"Then {rule_to_text(pd.Series(row._asdict()))['then_text']}<br>"
-                f"Lift: {row.lift:.2f}<br>Confidence: {row.confidence:.2f}"
-            )
+            antecedent_text.append(hover_text)
             antecedent_customdata.append(["rule", col_index - 1])
         for item in row.consequents:
             key = item
             point_group = consequent_points.setdefault(
                 item,
-                {"x": [], "y": [], "text": [], "customdata": [], "name": humanize_item(item).title(), "color": "#8AB7D1"},
+                {"x": [], "y": [], "text": [], "customdata": [], "name": humanize_item(item).title(), "color": NEGATIVE_COLOR},
             )
             point_group["x"].append(col_index)
             point_group["y"].append(y_positions[key])
-            point_group["text"].append(
-                f"Rule {col_index}<br>If {rule_to_text(pd.Series(row._asdict()))['if_text']}<br>"
-                f"Then {rule_to_text(pd.Series(row._asdict()))['then_text']}<br>"
-                f"Lift: {row.lift:.2f}<br>Confidence: {row.confidence:.2f}"
-            )
+            point_group["text"].append(hover_text)
             point_group["customdata"].append(["rule", col_index - 1])
 
     for col_index in range(1, len(plot_rules) + 1):
@@ -654,7 +756,7 @@ def make_rule_matrix_figure(
             y=len(row_records) - 0.15,
             text=rule_metric_text[col_index - 1],
             showarrow=False,
-            font={"size": 10, "color": "#4d4d4d"},
+            font={"size": 10, "color": NEUTRAL_TEXT_COLOR},
             xref="x2",
             yref="y2",
         )
@@ -664,7 +766,7 @@ def make_rule_matrix_figure(
             x=antecedent_x,
             y=antecedent_y,
             mode="markers",
-            marker={"symbol": "square", "size": 12, "color": "#8A67B5"},
+            marker={"symbol": "square", "size": 12, "color": PATIENT_COLOR},
             hovertemplate="%{text}<extra></extra>",
             text=antecedent_text,
             customdata=antecedent_customdata,
@@ -739,9 +841,12 @@ def make_rule_matrix_figure(
     fig.update_layout(
         title="Association Rule Matrix",
         template="plotly_white",
-        height=max(360, 28 * len(row_records) + 120),
+        height=min(RULE_FIG_MAX_HEIGHT, max(360, 28 * len(row_records) + 120)),
         margin={"l": 150, "r": 20, "t": 70, "b": 30},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.03, "x": 0},
+        clickmode="event+select",
+        dragmode="select",
+        hovermode="closest",
     )
     for record in row_records:
         if not record["is_header"]:
@@ -821,7 +926,7 @@ def make_top_rules_bar_figure(ranked_rules: pd.DataFrame, top_n: int = 8) -> go.
             x=top_rules["lift"],
             y=labels,
             orientation="h",
-            marker_color="#8AB7D1",
+            marker_color=NEGATIVE_COLOR,
             customdata=hover_text,
             hovertemplate="%{customdata}<extra></extra>",
         )
@@ -829,7 +934,7 @@ def make_top_rules_bar_figure(ranked_rules: pd.DataFrame, top_n: int = 8) -> go.
     fig.update_layout(
         title="Top Rules by Lift",
         template="plotly_white",
-        height=max(320, 44 * len(top_rules) + 80),
+        height=min(RULE_FIG_MAX_HEIGHT, max(RULE_FIG_MIN_HEIGHT, 44 * len(top_rules) + 80)),
         margin={"l": 90, "r": 20, "t": 50, "b": 30},
         xaxis_title="Lift",
         yaxis_title="",
@@ -887,7 +992,7 @@ def make_rule_distribution_figure(rules_df: pd.DataFrame | None = None) -> go.Fi
             marker={
                 "size": plot_df["lift"].clip(lower=1.0) * 16,
                 "color": plot_df["lift"],
-                "colorscale": [[0, "#8AB7D1"], [1, "#DD7C7C"]],
+                "colorscale": DIVERGING_COLOR_SCALE,
                 "showscale": True,
                 "colorbar": {"title": "Lift"},
                 "line": {"color": "rgba(255,255,255,0.95)", "width": 1.2},
@@ -896,7 +1001,7 @@ def make_rule_distribution_figure(rules_df: pd.DataFrame | None = None) -> go.Fi
             text=plot_df["hover_text"],
             customdata=plot_df.index,
             hovertemplate="%{text}<extra></extra>",
-            selected={"marker": {"opacity": 1.0, "color": "#7f4bc4", "size": 20}},
+            selected={"marker": {"opacity": 1.0, "color": PATIENT_COLOR, "size": 20}},
             unselected={"marker": {"opacity": 0.22}},
         )
     )

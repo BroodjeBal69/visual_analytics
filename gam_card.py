@@ -17,12 +17,12 @@ from data import (
     slope_map,
 )
 from models.rf import gam_categorical_features, gam_features, gam_numeric_features, model_gam
+from palette import NEGATIVE_COLOR, PATIENT_COLOR, POSITIVE_COLOR
 
-POSITIVE_COLOR = "#DD7C7C"
-NEGATIVE_COLOR = "#8AB7D1"
-PATIENT_COLOR = "#7f4bc4"
-LOW_RISK_BG = "rgba(138, 183, 209, 0.18)"
+LOW_RISK_BG = "rgba(99, 159, 194, 0.18)"
 HIGH_RISK_BG = "rgba(221, 124, 124, 0.18)"
+GAM_MIN_HEIGHT = 400
+GAM_MAX_HEIGHT = 1000
 
 
 GAM_CATEGORY_LABELS = {
@@ -278,12 +278,12 @@ def make_gam_figure(patient_df: pd.DataFrame, selected_features: list[str] | Non
             )
 
         fig.update_xaxes(title_text=label_map.get(feature, feature.title()), row=row, col=col)
-        fig.update_yaxes(title_text="Partial effect", zeroline=True, zerolinecolor="#cfcfd4", row=row, col=col)
+        fig.update_yaxes(title_text="Partial effect", zeroline=True, zerolinecolor=PATIENT_COLOR, row=row, col=col)
 
     fig.update_layout(
         title="GAM Feature Effects for Current Patient",
         template="plotly_white",
-        height=200 * rows,
+        height=min(GAM_MAX_HEIGHT, max(GAM_MIN_HEIGHT, 200 * rows)),
         margin={"l": 20, "r": 20, "t": 60, "b": 20},
     )
     return fig
