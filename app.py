@@ -19,7 +19,7 @@ from population import (
     build_population_context,
     get_kmeans_cluster_options,
     make_cluster_explanation_summary,
-    make_cluster_overview_figure,
+    make_cluster_pca_figure,
     make_cluster_profile_figure,
     make_feature_relationships_summary,
     make_population_summary_alert,
@@ -82,13 +82,11 @@ initial_relationship_x = "age" if "age" in RELATIONSHIP_NUMERIC_FEATURES else RE
 initial_relationship_y = "chol" if "chol" in RELATIONSHIP_NUMERIC_FEATURES else (
     RELATIONSHIP_NUMERIC_FEATURES[1] if len(RELATIONSHIP_NUMERIC_FEATURES) > 1 else RELATIONSHIP_NUMERIC_FEATURES[0]
 )
-initial_relationship_view_space = "raw"
 initial_relationship_color = "disease"
 initial_relationship_figure = make_feature_relationships_figure(
     initial_relationship_x,
     initial_relationship_y,
     initial_relationship_color,
-    view_space=initial_relationship_view_space,
     show_density_contours=False,
     highlight_patient=False,
     patient_input=default_patient_input,
@@ -96,11 +94,15 @@ initial_relationship_figure = make_feature_relationships_figure(
 initial_relationship_summary = make_feature_relationships_summary(
     initial_relationship_x,
     initial_relationship_y,
-    view_space=initial_relationship_view_space,
 )
 initial_cluster_options = get_kmeans_cluster_options(n_clusters=3)
 initial_selected_cluster = initial_cluster_options[0]["value"] if initial_cluster_options else 0
-initial_cluster_overview_figure = make_cluster_overview_figure(initial_selected_cluster, n_clusters=3)
+initial_cluster_pca_color = "cluster"
+initial_cluster_pca_figure = make_cluster_pca_figure(
+    initial_selected_cluster,
+    color_by=initial_cluster_pca_color,
+    n_clusters=3,
+)
 initial_cluster_profile_figure = make_cluster_profile_figure(initial_selected_cluster, n_clusters=3)
 initial_cluster_summary = make_cluster_explanation_summary(initial_selected_cluster, n_clusters=3)
 
@@ -465,17 +467,6 @@ app.layout = dbc.Container([
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            dbc.Label("View space", className="fw-semibold"),
-                            dcc.Dropdown(
-                                id="relationship-view-space",
-                                options=[
-                                    {"label": "Raw features", "value": "raw"},
-                                    {"label": "PCA projection", "value": "pca"},
-                                ],
-                                value=initial_relationship_view_space,
-                                clearable=False,
-                                className="mb-3",
-                            ),
                             dbc.Label("X-axis feature", className="fw-semibold"),
                             dcc.Dropdown(
                                 id="relationship-x-feature",
@@ -555,6 +546,17 @@ app.layout = dbc.Container([
                                 clearable=False,
                                 className="mb-3",
                             ),
+                            dbc.Label("PCA color by", className="fw-semibold"),
+                            dcc.Dropdown(
+                                id="cluster-pca-color-by",
+                                options=[
+                                    {"label": "Cluster", "value": "cluster"},
+                                    {"label": "Disease", "value": "disease"},
+                                ],
+                                value=initial_cluster_pca_color,
+                                clearable=False,
+                                className="mb-3",
+                            ),
                             dbc.Alert(
                                 initial_cluster_summary,
                                 id="cluster-explanation-summary",
@@ -564,8 +566,8 @@ app.layout = dbc.Container([
                         ], width=3),
                         dbc.Col([
                             dcc.Graph(
-                                id="cluster-overview-graph",
-                                figure=initial_cluster_overview_figure,
+                                id="cluster-pca-graph",
+                                figure=initial_cluster_pca_figure,
                                 config={"displayModeBar": False, "responsive": True},
                                 responsive=True,
                                 style={"height": POPULATION_VIEW_DISTRIBUTION_HEIGHT},
@@ -747,6 +749,7 @@ def update_shap_prediction(
 def update_rule_builder_feature_options(filter_options, current_feature):
     feature_options = []
     seen = set()
+    feature_labels = {"target": "Heart Disease"}
     for option in filter_options or []:
         item_value = str(option.get("value", ""))
         if "=" not in item_value:
@@ -755,7 +758,7 @@ def update_rule_builder_feature_options(filter_options, current_feature):
         if feature in seen:
             continue
         seen.add(feature)
-        feature_options.append({"label": feature.replace("_", " ").title(), "value": feature})
+        feature_options.append({"label": feature_labels.get(feature, feature.replace("_", " ").title()), "value": feature})
 
     selected_feature = current_feature if current_feature in seen else (feature_options[0]["value"] if feature_options else None)
     return feature_options, selected_feature
@@ -960,7 +963,6 @@ def update_population_distribution_view(feature, mode):
 @app.callback(
     Output("feature-relationships-graph", "figure"),
     Output("feature-relationships-summary", "children"),
-    Input("relationship-view-space", "value"),
     Input("relationship-x-feature", "value"),
     Input("relationship-y-feature", "value"),
     Input("relationship-color-by", "value"),
@@ -978,7 +980,6 @@ def update_population_distribution_view(feature, mode):
     Input("input-slope", "data"),
 )
 def update_feature_relationships(
-    view_space,
     x_feature,
     y_feature,
     color_by,
@@ -1013,25 +1014,25 @@ def update_feature_relationships(
         x_feature,
         y_feature,
         color_by,
-        view_space=view_space,
         show_density_contours="density" in option_values,
         highlight_patient="highlight" in option_values,
         patient_input=patient_input,
     )
-    summary = make_feature_relationships_summary(x_feature, y_feature, view_space=view_space)
+    summary = make_feature_relationships_summary(x_feature, y_feature)
     return figure, summary
 
 
 @app.callback(
-    Output("cluster-overview-graph", "figure"),
+    Output("cluster-pca-graph", "figure"),
     Output("cluster-profile-graph", "figure"),
     Output("cluster-explanation-summary", "children"),
     Input("cluster-explanation-selected", "value"),
+    Input("cluster-pca-color-by", "value"),
 )
-def update_cluster_explanation(selected_cluster):
+def update_cluster_explanation(selected_cluster, cluster_pca_color_by):
     cluster_value = selected_cluster if selected_cluster is not None else initial_selected_cluster
     return (
-        make_cluster_overview_figure(cluster_value, n_clusters=3),
+        make_cluster_pca_figure(cluster_value, color_by=cluster_pca_color_by, n_clusters=3),
         make_cluster_profile_figure(cluster_value, n_clusters=3),
         make_cluster_explanation_summary(cluster_value, n_clusters=3),
     )

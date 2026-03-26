@@ -139,7 +139,7 @@ def build_rule_dataset(df: pd.DataFrame | None = None) -> pd.DataFrame:
 def build_rules(
     df: pd.DataFrame | None = None,
     min_support: float = 0.05,
-    min_confidence: float = 0.7,
+    min_confidence: float = 0.75,
 ) -> pd.DataFrame:
     rule_df = build_rule_dataset(df)
     one_hot = pd.get_dummies(rule_df.astype(str), prefix_sep="=")
@@ -871,7 +871,12 @@ def make_rule_matrix_figure(
 
 def get_rule_filter_options(rules_df: pd.DataFrame | None = None) -> list[dict]:
     active_rules = PLOT_RULES_DF if rules_df is None else rules_df
-    items = sorted({item for antecedents in active_rules["antecedents"] for item in antecedents}, key=humanize_item)
+    items = set()
+    for antecedents in active_rules["antecedents"]:
+        items.update(antecedents)
+    for consequents in active_rules["consequents"]:
+        items.update(consequents)
+    items = sorted(items, key=humanize_item)
     return [{"label": humanize_item(item), "value": item} for item in items]
 
 
@@ -881,9 +886,21 @@ def filter_rules_by_antecedents(rules_df: pd.DataFrame | None = None, selected_i
         return active_rules
 
     selected_set = set(selected_items)
-    return active_rules[
-        active_rules["antecedents"].apply(lambda items: selected_set.issubset(set(items)))
-    ].reset_index(drop=True)
+    selected_outcomes = {item for item in selected_set if str(item).startswith("target=")}
+    selected_antecedents = selected_set - selected_outcomes
+
+    filtered = active_rules
+    if selected_outcomes:
+        filtered = filtered[
+            filtered["consequents"].apply(lambda items: any(outcome in set(items) for outcome in selected_outcomes))
+        ]
+
+    if selected_antecedents:
+        filtered = filtered[
+            filtered["antecedents"].apply(lambda items: selected_antecedents.issubset(set(items)))
+        ]
+
+    return filtered.reset_index(drop=True)
 
 
 def make_top_rules_bar_figure(ranked_rules: pd.DataFrame, top_n: int = 8) -> go.Figure:

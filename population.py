@@ -22,9 +22,9 @@ from data import (
 from kmeans import assign_kmeans_clusters_with_pca
 from models.rf import available_features, model_rf
 from palette import (
-    CLUSTER_COLOR_MAP,
     DEEMPHASIS_GREY,
     DISEASE_COLOR_MAP,
+    CLUSTER_COLOR_MAP,
     NEGATIVE_COLOR,
     PATIENT_COLOR,
     POSITIVE_COLOR,
@@ -160,6 +160,71 @@ def make_cluster_profile_figure(selected_cluster: int, n_clusters: int = 3):
     return fig
 
 
+def make_cluster_pca_figure(selected_cluster: int | None, color_by: str = "cluster", n_clusters: int = 3):
+    labels, pca_df, _ = assign_kmeans_clusters_with_pca(
+        data,
+        RELATIONSHIP_NUMERIC_FEATURES,
+        n_clusters=n_clusters,
+        random_state=42,
+        n_init=10,
+    )
+
+    plot_df = data.copy()
+    plot_df["pca_1"] = pca_df["pca_1"].values if "pca_1" in pca_df.columns else 0.0
+    plot_df["pca_2"] = pca_df["pca_2"].values if "pca_2" in pca_df.columns else 0.0
+    plot_df["Cluster"] = [f"Cluster {int(idx) + 1}" for idx in labels]
+    plot_df["Outcome"] = plot_df["target"].map({0: "No Disease", 1: "Disease"})
+
+    color_mode = color_by if color_by in {"cluster", "disease"} else "cluster"
+    if color_mode == "disease":
+        color_col = "Outcome"
+        color_map = DISEASE_COLOR_MAP
+        title = "PCA Cluster Map (Color: Disease)"
+    else:
+        color_col = "Cluster"
+        color_map = CLUSTER_COLOR_MAP
+        title = "PCA Cluster Map (Color: Cluster)"
+
+    fig = px.scatter(
+        plot_df,
+        x="pca_1",
+        y="pca_2",
+        color=color_col,
+        color_discrete_map=color_map,
+        opacity=0.65,
+        labels={"pca_1": "PCA 1", "pca_2": "PCA 2"},
+        title=title,
+    )
+
+    if selected_cluster is not None:
+        selected_label = f"Cluster {int(selected_cluster) + 1}"
+        selected_points = plot_df[plot_df["Cluster"] == selected_label]
+        if not selected_points.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=selected_points["pca_1"],
+                    y=selected_points["pca_2"],
+                    mode="markers",
+                    marker={
+                        "size": 11,
+                        "color": "rgba(0,0,0,0)",
+                        "line": {"color": PATIENT_COLOR, "width": 1.8},
+                    },
+                    name=f"Selected: {selected_label}",
+                    hovertemplate="Selected cluster member<extra></extra>",
+                    showlegend=True,
+                )
+            )
+
+    fig.update_layout(
+        template="plotly_white",
+        autosize=True,
+        margin={"l": 20, "r": 20, "t": 60, "b": 20},
+        legend_title_text="Group",
+    )
+    return fig
+
+
 def make_cluster_explanation_summary(selected_cluster: int, n_clusters: int = 3) -> list:
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
     cluster_id = int(selected_cluster) if selected_cluster is not None else 0
@@ -189,6 +254,10 @@ def make_cluster_explanation_summary(selected_cluster: int, n_clusters: int = 3)
         html.Div(f"Population share: {share:.0%}", className="small mb-1"),
         html.Div(f"Observed disease rate: {disease_rate:.0%}", className="small mb-1"),
         html.Div(f"Signature features: {signature}", className="small mb-1"),
+        html.Div(
+            "This plot shows how patients group based on similarity across multiple features.",
+            className="small mb-1",
+        ),
         html.Div(
             "Interpretation: this is an unsupervised segment; combine with SHAP and rules for patient-level decisions.",
             className="small text-muted",
@@ -332,30 +401,7 @@ def make_population_distribution_view_figure(feature: str, mode: str):
     return fig
 
 
-def make_feature_relationships_summary(x_feature: str, y_feature: str, view_space: str = "raw") -> list:
-    selected_view = view_space if view_space in {"raw", "pca"} else "raw"
-
-    if selected_view == "pca":
-        _, _, cluster_summary = assign_kmeans_clusters_with_pca(
-            data,
-            RELATIONSHIP_NUMERIC_FEATURES,
-            n_clusters=3,
-            random_state=42,
-            n_init=10,
-        )
-        cluster_text = ", ".join(
-            [f"C{int(row.cluster) + 1}: {int(row.size)}" for row in cluster_summary.itertuples(index=False)]
-        ) or "n/a"
-        return [
-            html.Div("Quick Insight", className="fw-semibold mb-2"),
-            html.Div("View space: PCA projection (PC1 vs PC2)", className="small mb-1"),
-            html.Div(f"Cluster sizes: {cluster_text}", className="small mb-1"),
-            html.Div(
-                "Clinical note: use PCA mode for pattern/outlier discovery, then switch to Raw mode for interpretable variable relationships.",
-                className="small text-muted",
-            ),
-        ]
-
+def make_feature_relationships_summary(x_feature: str, y_feature: str) -> list:
     x_col = x_feature if x_feature in RELATIONSHIP_NUMERIC_FEATURES else RELATIONSHIP_NUMERIC_FEATURES[0]
     y_col = y_feature if y_feature in RELATIONSHIP_NUMERIC_FEATURES else (
         RELATIONSHIP_NUMERIC_FEATURES[1] if len(RELATIONSHIP_NUMERIC_FEATURES) > 1 else RELATIONSHIP_NUMERIC_FEATURES[0]
