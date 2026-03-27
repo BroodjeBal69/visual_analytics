@@ -17,7 +17,13 @@ from data import (
     slope_map,
 )
 from models.rf import gam_categorical_features, gam_features, gam_numeric_features, model_gam
-from palette import NEGATIVE_COLOR, PATIENT_COLOR, POSITIVE_COLOR
+from palette import (
+    NEGATIVE_COLOR,
+    NEUTRAL_LINE_COLOR,
+    NEUTRAL_TEXT_COLOR,
+    PATIENT_COLOR,
+    POSITIVE_COLOR,
+)
 
 LOW_RISK_BG = "rgba(99, 159, 194, 0.18)"
 HIGH_RISK_BG = "rgba(221, 124, 124, 0.18)"
@@ -277,8 +283,26 @@ def make_gam_figure(patient_df: pd.DataFrame, selected_features: list[str] | Non
                 col=col,
             )
 
-        fig.update_xaxes(title_text=label_map.get(feature, feature.title()), row=row, col=col)
-        fig.update_yaxes(title_text="Partial effect", zeroline=True, zerolinecolor=PATIENT_COLOR, row=row, col=col)
+        fig.update_xaxes(
+            title_text=label_map.get(feature, feature.title()),
+            showline=True,
+            linecolor=NEUTRAL_LINE_COLOR,
+            tickfont={"color": NEUTRAL_TEXT_COLOR},
+            title_font={"color": NEUTRAL_TEXT_COLOR},
+            row=row,
+            col=col,
+        )
+        fig.update_yaxes(
+            title_text="Partial effect",
+            showline=True,
+            linecolor=NEUTRAL_LINE_COLOR,
+            zeroline=True,
+            zerolinecolor=NEUTRAL_LINE_COLOR,
+            tickfont={"color": NEUTRAL_TEXT_COLOR},
+            title_font={"color": NEUTRAL_TEXT_COLOR},
+            row=row,
+            col=col,
+        )
 
     fig.update_layout(
         title="GAM Feature Effects for Current Patient",

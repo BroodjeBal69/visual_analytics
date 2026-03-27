@@ -4,6 +4,13 @@ from dash import Dash, Input, Output, dcc, html, dash_table, ALL, State, ctx
 import dash
 import dash_bootstrap_components as dbc
 import json
+import palette as palette_module
+import scatter as scatter_module
+import population as population_module
+import rule_mining as rule_mining_module
+import shap_card as shap_card_module
+import gam_card as gam_card_module
+import radar_card as radar_card_module
 
 from gam_card import build_gam_dataframe, predict_gam_risk, make_gam_figure
 from data import load_data
@@ -32,6 +39,7 @@ from rule_mining import (
     build_selected_rule_details,
     build_top_rules_table_data,
     filter_rules_by_antecedents,
+    get_selected_rule_matching_patient_ids,
     get_matrix_rules,
     get_rule_filter_options,
     make_rule_matrix_figure,
@@ -57,6 +65,92 @@ def risk_color(probability):
     green = int(160 * (1 - probability))
     return f"rgb({red}, {green}, 60)"
 
+
+def sync_palette_mode(mode: str | None) -> str:
+    resolved_mode = palette_module.apply_palette_mode(mode)
+
+    scatter_module.CLUSTER_COLOR_MAP = palette_module.CLUSTER_COLOR_MAP
+    scatter_module.DISEASE_COLOR_MAP = palette_module.DISEASE_COLOR_MAP
+    scatter_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
+
+    population_module.DEEMPHASIS_GREY = palette_module.DEEMPHASIS_GREY
+    population_module.DISEASE_COLOR_MAP = palette_module.DISEASE_COLOR_MAP
+    population_module.CLUSTER_COLOR_MAP = palette_module.CLUSTER_COLOR_MAP
+    population_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
+    population_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
+    population_module.POSITIVE_COLOR = palette_module.POSITIVE_COLOR
+    population_module.PROFILE_DIRECTION_COLOR_MAP = palette_module.PROFILE_DIRECTION_COLOR_MAP
+
+    rule_mining_module.DISEASE_COLOR_MAP = palette_module.DISEASE_COLOR_MAP
+    rule_mining_module.DIVERGING_COLOR_SCALE = palette_module.DIVERGING_COLOR_SCALE
+    rule_mining_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
+    rule_mining_module.NEUTRAL_TEXT_COLOR = palette_module.NEUTRAL_TEXT_COLOR
+    rule_mining_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
+    rule_mining_module.POSITIVE_COLOR = palette_module.POSITIVE_COLOR
+
+    shap_card_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
+    shap_card_module.NEUTRAL_LINE_COLOR = palette_module.NEUTRAL_LINE_COLOR
+    shap_card_module.POSITIVE_COLOR = palette_module.POSITIVE_COLOR
+
+    gam_card_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
+    gam_card_module.NEUTRAL_LINE_COLOR = palette_module.NEUTRAL_LINE_COLOR
+    gam_card_module.NEUTRAL_TEXT_COLOR = palette_module.NEUTRAL_TEXT_COLOR
+    gam_card_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
+    gam_card_module.POSITIVE_COLOR = palette_module.POSITIVE_COLOR
+
+    radar_card_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
+    radar_card_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
+
+    return resolved_mode
+
+
+def color_mode_tokens(mode: str | None) -> dict[str, str]:
+    return palette_module.get_palette_tokens(mode)
+
+
+def _rule_signature(row) -> tuple:
+    return (
+        tuple(row["antecedents"]),
+        tuple(row["consequents"]),
+        round(float(row["support"]), 6),
+        round(float(row["confidence"]), 6),
+        round(float(row["lift"]), 6),
+    )
+
+
+def get_patient_rule_selection(
+    patient_input: dict,
+    selected_rule_filters: list[str] | None,
+    col_sort: str,
+    rule_count: int,
+    top_n: int = 5,
+) -> list[int]:
+    filtered_rules = filter_rules_by_antecedents(
+        build_plot_rules(RULES_DF),
+        selected_rule_filters,
+    )
+    matrix_rules = get_matrix_rules(filtered_rules, top_n=rule_count, col_sort=col_sort)
+    if matrix_rules.empty:
+        return []
+
+    ranked = get_ranked_rules_for_patient(patient_input, rules_df=matrix_rules)
+    if ranked.empty:
+        return []
+
+    selected_signatures = {
+        _rule_signature(row)
+        for _, row in ranked.head(top_n).iterrows()
+    }
+
+    selected_indices = []
+    for idx, row in matrix_rules.reset_index(drop=True).iterrows():
+        if _rule_signature(row) in selected_signatures:
+            selected_indices.append(int(idx))
+    return sorted(selected_indices)
+
+
+sync_palette_mode(palette_module.DEFAULT_PALETTE_MODE)
+
 initial_shap_figure = make_shap_figure(model_rf, build_patient_dataframe(default_patient_input),)
 initial_selected_gam_features = gam_features.copy()
 initial_selected_population_features = POPULATION_CONTEXT_FEATURES.copy()
@@ -72,7 +166,7 @@ initial_population_rules_df = build_plot_rules(RULES_DF)
 initial_rule_matrix_figure = make_rule_matrix_figure(initial_population_rules_df, top_n=25)
 initial_rule_detail = dbc.Alert("Click a rule column in the matrix to inspect that rule.", color="light", className="mb-0")
 rule_filter_options = get_rule_filter_options(initial_population_rules_df)
-initial_population_distribution_feature = "age"
+initial_population_distribution_feature = ["age"]
 initial_population_distribution_mode = "histogram"
 initial_population_distribution_figure = make_population_distribution_view_figure(
     initial_population_distribution_feature,
@@ -88,8 +182,7 @@ initial_relationship_figure = make_feature_relationships_figure(
     initial_relationship_y,
     initial_relationship_color,
     show_density_contours=False,
-    highlight_patient=False,
-    patient_input=default_patient_input,
+    patient_input={},
 )
 initial_relationship_summary = make_feature_relationships_summary(
     initial_relationship_x,
@@ -102,6 +195,7 @@ initial_cluster_pca_figure = make_cluster_pca_figure(
     initial_selected_cluster,
     color_by=initial_cluster_pca_color,
     n_clusters=3,
+    patient_input=None,
 )
 initial_cluster_profile_figure = make_cluster_profile_figure(initial_selected_cluster, n_clusters=3)
 initial_cluster_summary = make_cluster_explanation_summary(initial_selected_cluster, n_clusters=3)
@@ -123,19 +217,51 @@ app.layout = dbc.Container([
     dcc.Location(id='url', refresh=False),
     dcc.Store(id="active-view", data="patient"),
     dcc.Store(id="population-selected-rules", data=[]),
+    dcc.Store(id="population-rule-matched-patient-ids", data=[]),
+    dcc.Store(id="color-mode", data=palette_module.DEFAULT_PALETTE_MODE),
+    dcc.Store(id="population-patient-overlay-enabled", data=False),
     
     # ---- Header Card ----
 
     dbc.Card(
         [
             dbc.CardHeader(
-                [
-                    html.H1("Heart Disease Risk Dashboard", className="mb-1 p-3 bg-info-subtle text-info-emphasis text-center fw-bold"),
-                    html.Div(
-                        "For patient-specific risk prediction and model insights",
-                        className="card-title, text-muted text-center text-lighter"
-                    ),
-                ],
+                html.Div(
+                    [
+                        dbc.Button(
+                            "👁",
+                            id="colorblind-mode-glyph",
+                            color="light",
+                            outline=True,
+                            className="colorblind-mode-glyph",
+                            title="Color blind mode",
+                        ),
+                        dbc.Button(
+                            "👤",
+                            id="patient-import-glyph",
+                            color="light",
+                            outline=True,
+                            className="population-import-glyph",
+                            title="Import patient into population view",
+                        ),
+                        dbc.Tooltip(
+                            "Color blind mode: send me an alternate palette and I can wire it in.",
+                            target="colorblind-mode-glyph",
+                            placement="left",
+                        ),
+                        dbc.Tooltip(
+                            "Patient import mode: toggle to project current patient into population charts and auto-select matching rules.",
+                            target="patient-import-glyph",
+                            placement="left",
+                        ),
+                        html.H1("Heart Disease Risk Dashboard", className="mb-1 p-3 bg-info-subtle text-info-emphasis text-center fw-bold"),
+                        html.Div(
+                            "For patient-specific risk prediction and model insights",
+                            className="card-title, text-muted text-center text-lighter"
+                        ),
+                    ],
+                    className="dashboard-header-shell",
+                ),
                 className="p-3",
             ),
             dbc.CardBody(
@@ -411,6 +537,12 @@ app.layout = dbc.Container([
                                 className="mb-4",
                             ),
                             html.H5("Selected Rule", className="mb-3"),
+                            dbc.Alert(
+                                "No rule-linked patients selected.",
+                                id="population-rule-match-status",
+                                color="light",
+                                className="mb-3",
+                            ),
                             html.Div(initial_rule_detail, id="population-rule-detail"),
                         ], width=4),
                     ], className="g-4 align-items-start"),
@@ -422,7 +554,7 @@ app.layout = dbc.Container([
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            dbc.Label("Feature", className="fw-semibold"),
+                            dbc.Label("Features", className="fw-semibold"),
                             dcc.Dropdown(
                                 id="population-distribution-feature",
                                 options=[
@@ -434,6 +566,7 @@ app.layout = dbc.Container([
                                     if col != "target"
                                 ],
                                 value=initial_population_distribution_feature,
+                                multi=True,
                                 clearable=False,
                                 className="mb-3",
                             ),
@@ -506,7 +639,6 @@ app.layout = dbc.Container([
                                 id="relationship-options",
                                 options=[
                                     {"label": " Show density contours", "value": "density"},
-                                    {"label": " Highlight selected patient", "value": "highlight"},
                                 ],
                                 value=[],
                                 inputStyle={"marginRight": "0.35rem", "marginLeft": "0.5rem"},
@@ -590,7 +722,7 @@ app.layout = dbc.Container([
         style={"display": "none"},
     ),
 
-], fluid=True)
+], id="dashboard-root", fluid=True)
 
 # ========= Callbacks ===========
 
@@ -601,12 +733,15 @@ def register_categorical_badge_callback(field_name):
     @app.callback(
         Output(f"input-{field_name}", "data"),
         [Output({"type": f"{field_name}-badge", "value": value}, "className") for value in values],
-        [Input({"type": f"{field_name}-badge", "value": value}, "n_clicks") for value in values],
+        [Input({"type": f"{field_name}-badge", "value": value}, "n_clicks") for value in values] + [Input("reset-patient-button", "n_clicks")],
         prevent_initial_call=False,
     )
     def update_categorical_badges(*_):
         triggered = ctx.triggered_id
-        selected = default_patient_input[field_name] if triggered is None else triggered["value"]
+        if triggered is None or triggered == "reset-patient-button":
+            selected = default_patient_input[field_name]
+        else:
+            selected = triggered["value"]
         classes = [
             badge_class(value == selected, "me-2 mb-2")
             for value in values
@@ -618,6 +753,25 @@ def register_categorical_badge_callback(field_name):
 
 for categorical_field in CATEGORICAL_BADGE_LABELS:
     register_categorical_badge_callback(categorical_field)
+
+
+@app.callback(
+    Output("input-age", "value"),
+    Output("input-trestbps", "value"),
+    Output("input-chol", "value"),
+    Output("input-thalach", "value"),
+    Output("input-oldpeak", "value"),
+    Input("reset-patient-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def reset_patient_numeric_inputs(_n_clicks):
+    return (
+        int(default_patient_input["age"]),
+        float(default_patient_input["trestbps"]),
+        float(default_patient_input["chol"]),
+        float(default_patient_input["thalach"]),
+        float(default_patient_input["oldpeak"]),
+    )
 
 
 @app.callback(
@@ -649,6 +803,70 @@ def update_active_view(patient_clicks, population_clicks):
 
 
 @app.callback(
+    Output("color-mode", "data"),
+    Input("colorblind-mode-glyph", "n_clicks"),
+    State("color-mode", "data"),
+    prevent_initial_call=True,
+)
+def toggle_color_mode(_n_clicks, current_mode):
+    mode = current_mode if current_mode in {"pastel", "colorblind"} else palette_module.DEFAULT_PALETTE_MODE
+    return "pastel" if mode == "colorblind" else "colorblind"
+
+
+@app.callback(
+    Output("population-patient-overlay-enabled", "data"),
+    Input("patient-import-glyph", "n_clicks"),
+    State("population-patient-overlay-enabled", "data"),
+    prevent_initial_call=True,
+)
+def toggle_population_patient_overlay(_n_clicks, enabled):
+    return not bool(enabled)
+
+
+@app.callback(
+    Output("patient-import-glyph", "className"),
+    Output("patient-import-glyph", "title"),
+    Output("patient-import-glyph", "children"),
+    Input("population-patient-overlay-enabled", "data"),
+)
+def update_population_import_glyph(enabled):
+    if enabled:
+        return (
+            "population-import-glyph population-import-glyph-active",
+            "Patient import mode is active. Click to turn off.",
+            "👤",
+        )
+    return (
+        "population-import-glyph",
+        "Patient import mode is off. Click to turn on.",
+        "👤",
+    )
+
+
+@app.callback(
+    Output("dashboard-root", "style"),
+    Output("colorblind-mode-glyph", "title"),
+    Output("colorblind-mode-glyph", "children"),
+    Input("color-mode", "data"),
+)
+def apply_color_mode(color_mode):
+    resolved_mode = sync_palette_mode(color_mode)
+    tokens = color_mode_tokens(resolved_mode)
+    mode_title = "Color blind mode active" if resolved_mode == "colorblind" else "Pastel mode active"
+    next_hint = "Click to switch to pastel" if resolved_mode == "colorblind" else "Click to switch to color blind"
+    return (
+        {
+            "--positive-color": tokens["positive"],
+            "--negative-color": tokens["negative"],
+            "--patient-color": tokens["patient"],
+            "--deemphasis-grey": tokens["grey"],
+        },
+        f"{mode_title}. {next_hint}.",
+        "👁",
+    )
+
+
+@app.callback(
     Output("predicted-risk-value", "children"),
     Output("predicted-risk-value", "style"),
     Output("risk-category-value", "children"),
@@ -673,6 +891,7 @@ def update_active_view(patient_clicks, population_clicks):
     Input("input-slope", "data"),
     Input("input-gam-features", "value"),
     Input("input-population-features", "value"),
+    Input("color-mode", "data"),
 )
 def update_shap_prediction(
     age,
@@ -688,7 +907,9 @@ def update_shap_prediction(
     slope,
     selected_gam_features,
     selected_population_features,
+    color_mode,
 ):
+    sync_palette_mode(color_mode)
     patient_input = {
         "age": age,
         "sex": sex,
@@ -869,11 +1090,71 @@ def update_population_rule_filters(add_clicks, clear_clicks, remove_clicks, clic
     Input("population-rule-matrix-graph", "selectedData"),
     Input("population-rule-matrix-graph", "clickData"),
     Input("population-rule-matrix-graph", "figure"),
+    Input("population-patient-overlay-enabled", "data"),
+    Input("input-age", "value"),
+    Input("input-sex", "data"),
+    Input("input-cp", "data"),
+    Input("input-trestbps", "value"),
+    Input("input-chol", "value"),
+    Input("input-fbs", "data"),
+    Input("input-restecg", "data"),
+    Input("input-thalach", "value"),
+    Input("input-exang", "data"),
+    Input("input-oldpeak", "value"),
+    Input("input-slope", "data"),
+    Input("population-rule-filter", "value"),
+    Input("population-rule-col-sort", "value"),
+    Input("population-rule-count", "value"),
     State("population-selected-rules", "data"),
     prevent_initial_call=True,
 )
-def update_population_selected_rules(selected_data, click_data, _figure, current_selection):
+def update_population_selected_rules(
+    selected_data,
+    click_data,
+    _figure,
+    patient_overlay_enabled,
+    age,
+    sex,
+    cp,
+    trestbps,
+    chol,
+    fbs,
+    restecg,
+    thalach,
+    exang,
+    oldpeak,
+    slope,
+    selected_rule_filters,
+    col_sort,
+    rule_count,
+    current_selection,
+):
     triggered = ctx.triggered_id
+
+    if patient_overlay_enabled:
+        patient_input = {
+            "age": age,
+            "sex": sex,
+            "cp": cp,
+            "trestbps": trestbps,
+            "chol": chol,
+            "fbs": fbs,
+            "restecg": restecg,
+            "thalach": thalach,
+            "exang": exang,
+            "oldpeak": oldpeak,
+            "slope": slope,
+        }
+        return get_patient_rule_selection(
+            patient_input,
+            selected_rule_filters,
+            col_sort,
+            int(rule_count or 25),
+            top_n=5,
+        )
+
+    if triggered == "population-patient-overlay-enabled":
+        return []
 
     # Clear selection whenever the matrix is rebuilt after filtering/sorting changes.
     if triggered == "population-rule-matrix-graph" and ctx.triggered[0]["prop_id"].endswith(".figure"):
@@ -916,8 +1197,10 @@ def update_population_selected_rules(selected_data, click_data, _figure, current
     Input("population-rule-col-sort", "value"),
     Input("population-rule-collapse", "value"),
     Input("population-rule-count", "value"),
+    Input("color-mode", "data"),
 )
-def update_population_rules_table(selected_rule_filters, row_sort, col_sort, collapse_values, rule_count):
+def update_population_rules_table(selected_rule_filters, row_sort, col_sort, collapse_values, rule_count, color_mode):
+    sync_palette_mode(color_mode)
     all_rules = build_plot_rules(RULES_DF)
     filtered_rules = filter_rules_by_antecedents(all_rules, selected_rule_filters)
     return (
@@ -952,12 +1235,91 @@ def update_population_rule_detail(selected_rule_indices, selected_rule_filters, 
 
 
 @app.callback(
+    Output("population-rule-matched-patient-ids", "data"),
+    Input("population-selected-rules", "data"),
+    Input("population-rule-filter", "value"),
+    Input("population-rule-col-sort", "value"),
+    Input("population-rule-count", "value"),
+)
+def update_rule_matched_patients(selected_rule_indices, selected_rule_filters, col_sort, rule_count):
+    return get_selected_rule_matching_patient_ids(
+        selected_rule_indices,
+        selected_items=selected_rule_filters,
+        col_sort=col_sort,
+        top_n=rule_count,
+    )
+
+
+@app.callback(
+    Output("population-rule-match-status", "children"),
+    Output("population-rule-match-status", "color"),
+    Input("population-rule-matched-patient-ids", "data"),
+)
+def update_rule_match_status(matched_patient_ids):
+    matched_count = len(matched_patient_ids or [])
+    if matched_count:
+        return f"Selected rules match {matched_count} patients.", "info"
+    return "No rule-linked patients selected.", "light"
+
+
+@app.callback(
     Output("population-distribution-view-graph", "figure"),
     Input("population-distribution-feature", "value"),
     Input("population-distribution-mode", "value"),
+    Input("population-rule-matched-patient-ids", "data"),
+    Input("color-mode", "data"),
+    Input("population-patient-overlay-enabled", "data"),
+    Input("input-age", "value"),
+    Input("input-sex", "data"),
+    Input("input-cp", "data"),
+    Input("input-trestbps", "value"),
+    Input("input-chol", "value"),
+    Input("input-fbs", "data"),
+    Input("input-restecg", "data"),
+    Input("input-thalach", "value"),
+    Input("input-exang", "data"),
+    Input("input-oldpeak", "value"),
+    Input("input-slope", "data"),
 )
-def update_population_distribution_view(feature, mode):
-    return make_population_distribution_view_figure(feature, mode)
+def update_population_distribution_view(
+    feature,
+    mode,
+    matched_patient_ids,
+    color_mode,
+    patient_overlay_enabled,
+    age,
+    sex,
+    cp,
+    trestbps,
+    chol,
+    fbs,
+    restecg,
+    thalach,
+    exang,
+    oldpeak,
+    slope,
+):
+    sync_palette_mode(color_mode)
+    patient_input = {
+        "age": age,
+        "sex": sex,
+        "cp": cp,
+        "trestbps": trestbps,
+        "chol": chol,
+        "fbs": fbs,
+        "restecg": restecg,
+        "thalach": thalach,
+        "exang": exang,
+        "oldpeak": oldpeak,
+        "slope": slope,
+    }
+    return make_population_distribution_view_figure(
+        feature,
+        mode,
+        patient_input=patient_input if patient_overlay_enabled else None,
+        show_patient=bool(patient_overlay_enabled),
+        matched_patient_ids=matched_patient_ids,
+    )
 
 
 @app.callback(
@@ -967,6 +1329,9 @@ def update_population_distribution_view(feature, mode):
     Input("relationship-y-feature", "value"),
     Input("relationship-color-by", "value"),
     Input("relationship-options", "value"),
+    Input("population-rule-matched-patient-ids", "data"),
+    Input("color-mode", "data"),
+    Input("population-patient-overlay-enabled", "data"),
     Input("input-age", "value"),
     Input("input-sex", "data"),
     Input("input-cp", "data"),
@@ -984,6 +1349,9 @@ def update_feature_relationships(
     y_feature,
     color_by,
     options,
+    matched_patient_ids,
+    color_mode,
+    patient_overlay_enabled,
     age,
     sex,
     cp,
@@ -996,6 +1364,7 @@ def update_feature_relationships(
     oldpeak,
     slope,
 ):
+    sync_palette_mode(color_mode)
     patient_input = {
         "age": age,
         "sex": sex,
@@ -1009,14 +1378,20 @@ def update_feature_relationships(
         "oldpeak": oldpeak,
         "slope": slope,
     }
+    patient_outcome_label = None
+    if patient_overlay_enabled:
+        patient_probability = float(model_rf.predict_proba(build_patient_dataframe(patient_input))[0, 1])
+        patient_outcome_label = "Disease" if patient_probability >= 0.5 else "No disease"
+
     option_values = options or []
     figure = make_feature_relationships_figure(
         x_feature,
         y_feature,
         color_by,
         show_density_contours="density" in option_values,
-        highlight_patient="highlight" in option_values,
-        patient_input=patient_input,
+        patient_input=patient_input if patient_overlay_enabled else {},
+        matched_patient_ids=matched_patient_ids,
+        patient_outcome_label=patient_outcome_label,
     )
     summary = make_feature_relationships_summary(x_feature, y_feature)
     return figure, summary
@@ -1028,11 +1403,62 @@ def update_feature_relationships(
     Output("cluster-explanation-summary", "children"),
     Input("cluster-explanation-selected", "value"),
     Input("cluster-pca-color-by", "value"),
+    Input("population-rule-matched-patient-ids", "data"),
+    Input("color-mode", "data"),
+    Input("population-patient-overlay-enabled", "data"),
+    Input("input-age", "value"),
+    Input("input-sex", "data"),
+    Input("input-cp", "data"),
+    Input("input-trestbps", "value"),
+    Input("input-chol", "value"),
+    Input("input-fbs", "data"),
+    Input("input-restecg", "data"),
+    Input("input-thalach", "value"),
+    Input("input-exang", "data"),
+    Input("input-oldpeak", "value"),
+    Input("input-slope", "data"),
 )
-def update_cluster_explanation(selected_cluster, cluster_pca_color_by):
+def update_cluster_explanation(
+    selected_cluster,
+    cluster_pca_color_by,
+    matched_patient_ids,
+    color_mode,
+    patient_overlay_enabled,
+    age,
+    sex,
+    cp,
+    trestbps,
+    chol,
+    fbs,
+    restecg,
+    thalach,
+    exang,
+    oldpeak,
+    slope,
+):
+    sync_palette_mode(color_mode)
     cluster_value = selected_cluster if selected_cluster is not None else initial_selected_cluster
+    patient_input = {
+        "age": age,
+        "sex": sex,
+        "cp": cp,
+        "trestbps": trestbps,
+        "chol": chol,
+        "fbs": fbs,
+        "restecg": restecg,
+        "thalach": thalach,
+        "exang": exang,
+        "oldpeak": oldpeak,
+        "slope": slope,
+    }
     return (
-        make_cluster_pca_figure(cluster_value, color_by=cluster_pca_color_by, n_clusters=3),
+        make_cluster_pca_figure(
+            cluster_value,
+            color_by=cluster_pca_color_by,
+            n_clusters=3,
+            patient_input=patient_input if patient_overlay_enabled else None,
+            matched_patient_ids=matched_patient_ids,
+        ),
         make_cluster_profile_figure(cluster_value, n_clusters=3),
         make_cluster_explanation_summary(cluster_value, n_clusters=3),
     )

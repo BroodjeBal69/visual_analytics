@@ -60,6 +60,23 @@ CLUSTER_PROFILE_FEATURES = [
 ]
 
 
+def _nearest_patient_index(patient_input: dict) -> int | None:
+    if data.empty:
+        return None
+    usable = [col for col in RELATIONSHIP_NUMERIC_FEATURES if col in patient_input]
+    if not usable:
+        return None
+
+    frame = data[usable].copy()
+    for col in usable:
+        std = float(frame[col].std()) or 1.0
+        frame[col] = (frame[col] - float(patient_input[col])) / std
+    distances = frame.abs().sum(axis=1)
+    if distances.empty:
+        return None
+    return int(distances.idxmin())
+
+
 def _build_clustered_population_df(n_clusters: int = 3) -> pd.DataFrame:
     labels, _, _ = assign_kmeans_clusters_with_pca(
         data,
@@ -76,13 +93,14 @@ def _build_clustered_population_df(n_clusters: int = 3) -> pd.DataFrame:
 def get_kmeans_cluster_options(n_clusters: int = 3) -> list[dict]:
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
     cluster_ids = sorted(clustered["cluster"].unique().tolist())
-    return [
+    options = [{"label": "All clusters", "value": "all"}] + [
         {"label": f"Cluster {int(cluster_id) + 1}", "value": int(cluster_id)}
         for cluster_id in cluster_ids
     ]
+    return options
 
 
-def make_cluster_overview_figure(selected_cluster: int | None, n_clusters: int = 3):
+def make_cluster_overview_figure(selected_cluster: int | str | None, n_clusters: int = 3):
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
     summary = (
         clustered.groupby("cluster", dropna=False)
@@ -92,7 +110,10 @@ def make_cluster_overview_figure(selected_cluster: int | None, n_clusters: int =
     )
     summary["Cluster"] = summary["cluster"].apply(lambda value: f"Cluster {int(value) + 1}")
     summary["Disease Rate"] = summary["disease_rate"].apply(lambda value: f"{value:.0%}")
-    summary["is_selected"] = summary["cluster"].astype(int) == int(selected_cluster) if selected_cluster is not None else False
+    if selected_cluster is not None and str(selected_cluster) != "all":
+        summary["is_selected"] = summary["cluster"].astype(int) == int(selected_cluster)
+    else:
+        summary["is_selected"] = False
 
     fig = px.bar(
         summary,
@@ -117,8 +138,29 @@ def make_cluster_overview_figure(selected_cluster: int | None, n_clusters: int =
     return fig
 
 
-def make_cluster_profile_figure(selected_cluster: int, n_clusters: int = 3):
+def make_cluster_profile_figure(selected_cluster: int | str | None, n_clusters: int = 3):
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
+    if selected_cluster is None or str(selected_cluster) == "all":
+        fig = go.Figure()
+        fig.add_annotation(
+            text="All clusters selected. Choose one cluster to view profile deviations.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 14},
+        )
+        fig.update_layout(
+            template="plotly_white",
+            autosize=True,
+            margin={"l": 20, "r": 20, "t": 60, "b": 20},
+            title="Cluster Profile",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
     cluster_id = int(selected_cluster) if selected_cluster is not None else 0
     if cluster_id not in clustered["cluster"].unique():
         cluster_id = int(sorted(clustered["cluster"].unique())[0])
@@ -160,7 +202,13 @@ def make_cluster_profile_figure(selected_cluster: int, n_clusters: int = 3):
     return fig
 
 
-def make_cluster_pca_figure(selected_cluster: int | None, color_by: str = "cluster", n_clusters: int = 3):
+def make_cluster_pca_figure(
+    selected_cluster: int | str | None,
+    color_by: str = "cluster",
+    n_clusters: int = 3,
+    patient_input: dict | None = None,
+    matched_patient_ids: list[int] | None = None,
+):
     labels, pca_df, _ = assign_kmeans_clusters_with_pca(
         data,
         RELATIONSHIP_NUMERIC_FEATURES,
@@ -174,6 +222,7 @@ def make_cluster_pca_figure(selected_cluster: int | None, color_by: str = "clust
     plot_df["pca_2"] = pca_df["pca_2"].values if "pca_2" in pca_df.columns else 0.0
     plot_df["Cluster"] = [f"Cluster {int(idx) + 1}" for idx in labels]
     plot_df["Outcome"] = plot_df["target"].map({0: "No Disease", 1: "Disease"})
+    plot_df["patient_id"] = plot_df.index
 
     color_mode = color_by if color_by in {"cluster", "disease"} else "cluster"
     if color_mode == "disease":
@@ -184,6 +233,9 @@ def make_cluster_pca_figure(selected_cluster: int | None, color_by: str = "clust
         color_col = "Cluster"
         color_map = CLUSTER_COLOR_MAP
         title = "PCA Cluster Map (Color: Cluster)"
+
+    plot_df[color_col] = plot_df[color_col].astype(str)
+    color_groups = list(pd.unique(plot_df[color_col]))
 
     fig = px.scatter(
         plot_df,
@@ -196,37 +248,130 @@ def make_cluster_pca_figure(selected_cluster: int | None, color_by: str = "clust
         title=title,
     )
 
-    if selected_cluster is not None:
-        selected_label = f"Cluster {int(selected_cluster) + 1}"
+    matched_ids = set(matched_patient_ids or [])
+    has_specific_cluster = selected_cluster is not None and str(selected_cluster) != "all"
+    selected_label = f"Cluster {int(selected_cluster) + 1}" if has_specific_cluster else None
+
+    if selected_label and color_mode == "cluster":
+        for trace in fig.data:
+            if trace.name == selected_label:
+                trace.update(opacity=0.95, marker={"line": {"color": "#111111", "width": 1.2}})
+            else:
+                trace.update(opacity=0.14)
+    elif selected_label:
+        for trace in fig.data:
+            trace.update(opacity=0.16)
+    elif matched_ids:
+        for trace in fig.data:
+            trace.update(opacity=0.18)
+
+    if has_specific_cluster:
         selected_points = plot_df[plot_df["Cluster"] == selected_label]
         if not selected_points.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=selected_points["pca_1"],
-                    y=selected_points["pca_2"],
-                    mode="markers",
-                    marker={
-                        "size": 11,
-                        "color": "rgba(0,0,0,0)",
-                        "line": {"color": PATIENT_COLOR, "width": 1.8},
-                    },
-                    name=f"Selected: {selected_label}",
-                    hovertemplate="Selected cluster member<extra></extra>",
-                    showlegend=True,
-                )
+            if color_mode != "cluster":
+                for idx, group in enumerate(color_groups):
+                    group_df = selected_points[selected_points[color_col] == group]
+                    if group_df.empty:
+                        continue
+                    group_color = color_map.get(group, PATIENT_COLOR)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=group_df["pca_1"],
+                            y=group_df["pca_2"],
+                            mode="markers",
+                            marker={
+                                "size": 10,
+                                "symbol": "circle",
+                                "color": group_color,
+                                "line": {"color": "#111111", "width": 1.2},
+                                "opacity": 0.96,
+                            },
+                            name=f"Selected: {selected_label}",
+                            hovertemplate="Selected cluster member<extra></extra>",
+                            showlegend=idx == 0,
+                        )
+                    )
+
+    nearest_idx = _nearest_patient_index(patient_input or {})
+    if nearest_idx is not None and nearest_idx in plot_df.index:
+        patient_group = str(plot_df.loc[nearest_idx, color_col])
+        patient_color = color_map.get(patient_group, PATIENT_COLOR)
+        fig.add_trace(
+            go.Scatter(
+                x=[float(plot_df.loc[nearest_idx, "pca_1"])],
+                y=[float(plot_df.loc[nearest_idx, "pca_2"])],
+                mode="markers",
+                marker={
+                    "symbol": "star",
+                    "size": 19,
+                    "color": patient_color,
+                    "line": {"color": "#111111", "width": 2.4},
+                },
+                name="Current patient",
+                hovertemplate="Current patient (nearest profile)<extra></extra>",
+                showlegend=True,
             )
+        )
+
+    if matched_ids:
+        matched_df = plot_df[plot_df["patient_id"].isin(matched_ids)]
+        if not matched_df.empty:
+            for idx, group in enumerate(color_groups):
+                group_df = matched_df[matched_df[color_col] == group]
+                if group_df.empty:
+                    continue
+                group_color = color_map.get(group, PATIENT_COLOR)
+                fig.add_trace(
+                    go.Scatter(
+                        x=group_df["pca_1"],
+                        y=group_df["pca_2"],
+                        mode="markers",
+                        marker={
+                            "size": 12,
+                            "symbol": "circle-open",
+                            "color": group_color,
+                            "line": {"color": group_color, "width": 2.2},
+                            "opacity": 1.0,
+                        },
+                        name="Rule-matched patients",
+                        hovertemplate="Rule-matched patient<extra></extra>",
+                        showlegend=idx == 0,
+                    )
+                )
 
     fig.update_layout(
         template="plotly_white",
         autosize=True,
         margin={"l": 20, "r": 20, "t": 60, "b": 20},
         legend_title_text="Group",
+        uirevision="cluster-pca",
     )
     return fig
 
 
-def make_cluster_explanation_summary(selected_cluster: int, n_clusters: int = 3) -> list:
+def make_cluster_explanation_summary(selected_cluster: int | str | None, n_clusters: int = 3) -> list:
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
+    if selected_cluster is None or str(selected_cluster) == "all":
+        overall_rate = float(clustered["target"].mean()) if len(clustered) else 0.0
+        return [
+            html.Div("Cluster Explanation", className="fw-semibold mb-2"),
+            html.Div("Selected: All clusters", className="small mb-1"),
+            html.Div(f"Total clusters: {clustered['cluster'].nunique()}", className="small mb-1"),
+            html.Div(f"Overall observed disease rate: {overall_rate:.0%}", className="small mb-1"),
+            html.Div(
+                "Tip: choose a specific cluster to see its profile deviations and focused interpretation.",
+                className="small mb-1",
+            ),
+            html.Div(
+                "This plot shows how patients group based on similarity across multiple features.",
+                className="small mb-1",
+            ),
+            html.Div(
+                "Interpretation: this is an unsupervised segment; combine with SHAP and rules for patient-level decisions.",
+                className="small text-muted",
+            ),
+        ]
+
     cluster_id = int(selected_cluster) if selected_cluster is not None else 0
     if cluster_id not in clustered["cluster"].unique():
         cluster_id = int(sorted(clustered["cluster"].unique())[0])
@@ -349,50 +494,145 @@ def build_population_distribution_figure(patient_input, selected_features=None):
     return fig
 
 
-def make_population_distribution_view_figure(feature: str, mode: str):
-    """Build population-only distributions split by disease vs no disease."""
-    selected_feature = feature if feature in data.columns and feature != "target" else "age"
+def make_population_distribution_view_figure(
+    feature: str | list[str] | None,
+    mode: str,
+    patient_input: dict | None = None,
+    show_patient: bool = False,
+    matched_patient_ids: list[int] | None = None,
+):
+    """Build one or more population distributions split by disease vs no disease."""
+    if isinstance(feature, list):
+        selected_features = [col for col in feature if col in data.columns and col != "target"]
+    elif isinstance(feature, str) and feature in data.columns and feature != "target":
+        selected_features = [feature]
+    else:
+        selected_features = ["age"]
+
+    if not selected_features:
+        selected_features = ["age"]
+
     selected_mode = mode if mode in {"histogram", "density"} else "histogram"
 
     plot_df = data.copy()
     plot_df["Outcome"] = plot_df["target"].map({0: "No Disease", 1: "Disease"})
-    is_numeric = pd.api.types.is_numeric_dtype(plot_df[selected_feature])
+    matched_ids = set(matched_patient_ids or [])
+    fig = make_subplots(
+        rows=1,
+        cols=len(selected_features),
+        subplot_titles=[label_map.get(col, col.title()) for col in selected_features],
+        horizontal_spacing=0.05,
+    )
 
-    if is_numeric:
-        histnorm = "probability density" if selected_mode == "density" else None
-        fig = px.histogram(
-            plot_df,
-            x=selected_feature,
-            color="Outcome",
-            nbins=24,
-            barmode="overlay",
-            opacity=0.6,
-            histnorm=histnorm,
-            color_discrete_map=DISEASE_COLOR_MAP,
-            labels={selected_feature: label_map.get(selected_feature, selected_feature.title())},
-            title=f"{label_map.get(selected_feature, selected_feature.title())}: {selected_mode.title()} by Outcome",
-        )
-    else:
-        counts = (
-            plot_df.groupby([selected_feature, "Outcome"], dropna=False)
-            .size()
-            .reset_index(name="count")
-        )
-        fig = px.bar(
-            counts,
-            x=selected_feature,
-            y="count",
-            color="Outcome",
-            barmode="group",
-            color_discrete_map=DISEASE_COLOR_MAP,
-            labels={
-                selected_feature: label_map.get(selected_feature, selected_feature.title()),
-                "count": "Patients",
-            },
-            title=f"{label_map.get(selected_feature, selected_feature.title())}: Category Counts by Outcome",
-        )
+    for idx, selected_feature in enumerate(selected_features, start=1):
+        is_numeric = pd.api.types.is_numeric_dtype(plot_df[selected_feature])
+        show_legend = idx == 1
+
+        if is_numeric:
+            histnorm = "probability density" if selected_mode == "density" else None
+            for outcome_label in ["No Disease", "Disease"]:
+                subset = plot_df.loc[plot_df["Outcome"] == outcome_label, selected_feature]
+                fig.add_trace(
+                    go.Histogram(
+                        x=subset,
+                        name=outcome_label,
+                        marker_color=DISEASE_COLOR_MAP.get(outcome_label, PATIENT_COLOR),
+                        opacity=0.6,
+                        nbinsx=24,
+                        histnorm=histnorm,
+                        showlegend=show_legend,
+                        legendgroup=outcome_label,
+                    ),
+                    row=1,
+                    col=idx,
+                )
+
+            if show_patient and patient_input and patient_input.get(selected_feature) is not None:
+                fig.add_vline(
+                    x=float(patient_input[selected_feature]),
+                    line_color=PATIENT_COLOR,
+                    line_width=3,
+                    row=1,
+                    col=idx,
+                )
+
+            if matched_ids:
+                matched_values = plot_df.loc[plot_df.index.isin(matched_ids), selected_feature].dropna().tolist()
+                for value in matched_values:
+                    fig.add_vline(
+                        x=float(value),
+                        line_color="#4b5563",
+                        line_width=1.1,
+                        opacity=0.28,
+                        layer="above",
+                        row=1,
+                        col=idx,
+                    )
+        else:
+            counts = (
+                plot_df.groupby([selected_feature, "Outcome"], dropna=False)
+                .size()
+                .reset_index(name="count")
+            )
+
+            for outcome_label in ["No Disease", "Disease"]:
+                subset = counts[counts["Outcome"] == outcome_label]
+                if subset.empty:
+                    continue
+                fig.add_trace(
+                    go.Bar(
+                        x=subset[selected_feature].astype(str),
+                        y=subset["count"],
+                        name=outcome_label,
+                        marker_color=DISEASE_COLOR_MAP.get(outcome_label, PATIENT_COLOR),
+                        opacity=0.85,
+                        showlegend=show_legend,
+                        legendgroup=outcome_label,
+                    ),
+                    row=1,
+                    col=idx,
+                )
+
+            if matched_ids:
+                matched_counts = (
+                    plot_df.loc[plot_df.index.isin(matched_ids)]
+                    .groupby([selected_feature, "Outcome"], dropna=False)
+                    .size()
+                    .reset_index(name="count")
+                )
+                for outcome_label in ["No Disease", "Disease"]:
+                    subset = matched_counts[matched_counts["Outcome"] == outcome_label]
+                    if subset.empty:
+                        continue
+                    outcome_color = DISEASE_COLOR_MAP.get(outcome_label, "#4b5563")
+                    fig.add_trace(
+                        go.Bar(
+                            x=subset[selected_feature].astype(str),
+                            y=subset["count"],
+                            name=f"Rule-matched ({outcome_label})",
+                            marker={
+                                "color": "rgba(0,0,0,0)",
+                                "line": {"color": outcome_color, "width": 1.4},
+                                "pattern": {"shape": "/", "fgcolor": outcome_color, "solidity": 0.35},
+                            },
+                            opacity=0.95,
+                            showlegend=show_legend,
+                            legendgroup=f"rule-{outcome_label}",
+                        ),
+                        row=1,
+                        col=idx,
+                    )
+
+        fig.update_xaxes(title_text=label_map.get(selected_feature, selected_feature.title()), row=1, col=idx)
+        fig.update_yaxes(title_text="Patients" if selected_mode == "histogram" else "Density", row=1, col=idx)
 
     fig.update_layout(
+        title=(
+            f"{selected_mode.title()} by Outcome"
+            if len(selected_features) > 1
+            else f"{label_map.get(selected_features[0], selected_features[0].title())}: {selected_mode.title()} by Outcome"
+        ),
+        barmode="overlay",
         template="plotly_white",
         autosize=True,
         margin={"l": 20, "r": 20, "t": 60, "b": 20},

@@ -180,6 +180,18 @@ def build_patient_input_panel(data, default_patient_input):
                 render_categorical_badges(data, default_patient_input, "slope"),
             ], width=6),
         ], className="g-3 mb-4"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Button(
+                    "Reset patient",
+                    id="reset-patient-button",
+                    color="secondary",
+                    outline=True,
+                    className="w-100",
+                    n_clicks=0,
+                ),
+            ], width=6),
+        ], className="g-3"),
     ], width=3)
 
 

@@ -1,11 +1,74 @@
 :root {
-  --positive-color: #E7A4A4;
-  --negative-color: #95C1DB;
-  --patient-color: #C3A8E5;
+  --positive-color: #66C2A5;
+  --negative-color: #8DA0CB;
+  --patient-color: #FC8D62;
   --deemphasis-grey: #B8B8B8;
 
   --chart-accent-positive: var(--positive-color);
   --chart-accent-negative: var(--negative-color);
   --chart-accent-selected: var(--patient-color);
   --chart-accent-muted: var(--deemphasis-grey);
+}
+
+.dashboard-header-shell {
+  position: relative;
+}
+
+.colorblind-mode-glyph {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  z-index: 2;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  line-height: 1;
+  border-color: var(--deemphasis-grey);
+  color: #4b5563;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
+}
+
+.colorblind-mode-glyph:hover,
+.colorblind-mode-glyph:focus {
+  color: #111827;
+  border-color: var(--patient-color);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.population-import-glyph {
+  position: absolute;
+  top: 0.25rem;
+  right: 3.15rem;
+  z-index: 2;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  line-height: 1;
+  border-color: var(--deemphasis-grey);
+  color: #4b5563;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
+}
+
+.population-import-glyph:hover,
+.population-import-glyph:focus {
+  color: #111827;
+  border-color: var(--patient-color);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.population-import-glyph-active {
+  color: #111827;
+  border-color: var(--patient-color);
+  background: rgba(255, 255, 255, 1);
+  box-shadow: 0 0 0 3px rgba(252, 141, 98, 0.25);
 }

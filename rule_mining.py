@@ -84,7 +84,7 @@ FEATURE_LABELS = {
 def _build_train_rule_source_df() -> pd.DataFrame:
     train_df = X_train.copy()
     train_df["target"] = y_train
-    return train_df.reset_index(drop=True)
+    return train_df.copy()
 
 
 TRAIN_RULE_SOURCE_DF = _build_train_rule_source_df()
@@ -134,6 +134,16 @@ def discretize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def build_rule_dataset(df: pd.DataFrame | None = None) -> pd.DataFrame:
     source_df = TRAIN_RULE_SOURCE_DF if df is None else df.copy()
     return discretize_dataframe(source_df)
+
+
+def _build_discretized_rule_source_df() -> pd.DataFrame:
+    discretized = discretize_dataframe(TRAIN_RULE_SOURCE_DF)
+    discretized = discretized.copy()
+    discretized["patient_id"] = TRAIN_RULE_SOURCE_DF.index.astype(int)
+    return discretized
+
+
+DISCRETIZED_RULE_SOURCE_DF = _build_discretized_rule_source_df()
 
 
 def build_rules(
@@ -903,6 +913,40 @@ def filter_rules_by_antecedents(rules_df: pd.DataFrame | None = None, selected_i
     return filtered.reset_index(drop=True)
 
 
+def _patient_ids_for_rule_row(rule_row: pd.Series) -> set[int]:
+    mask = pd.Series(True, index=DISCRETIZED_RULE_SOURCE_DF.index)
+    rule_items = list(rule_row["antecedents"]) + list(rule_row["consequents"])
+    for item in rule_items:
+        if "=" not in str(item):
+            continue
+        feature, value = str(item).split("=", 1)
+        if feature not in DISCRETIZED_RULE_SOURCE_DF.columns:
+            continue
+        mask &= DISCRETIZED_RULE_SOURCE_DF[feature].astype(str).eq(value)
+    return set(DISCRETIZED_RULE_SOURCE_DF.loc[mask, "patient_id"].astype(int).tolist())
+
+
+def get_selected_rule_matching_patient_ids(
+    selected_indices: list[int] | None,
+    selected_items: list[str] | None = None,
+    col_sort: str = "lift",
+    top_n: int = 25,
+) -> list[int]:
+    if not selected_indices:
+        return []
+
+    filtered_rules = filter_rules_by_antecedents(build_plot_rules(RULES_DF), selected_items)
+    matrix_rules = get_matrix_rules(filtered_rules, top_n=top_n, col_sort=col_sort)
+
+    matched_patient_ids: set[int] = set()
+    for rule_index in selected_indices:
+        if rule_index < 0 or rule_index >= len(matrix_rules):
+            continue
+        matched_patient_ids.update(_patient_ids_for_rule_row(matrix_rules.iloc[int(rule_index)]))
+
+    return sorted(matched_patient_ids)
+
+
 def make_top_rules_bar_figure(ranked_rules: pd.DataFrame, top_n: int = 8) -> go.Figure:
     fig = go.Figure()
 
@@ -1068,6 +1112,7 @@ __all__ = [
     "build_top_rules_table_data",
     "build_selected_rule_details",
     "filter_rules_by_antecedents",
+    "get_selected_rule_matching_patient_ids",
     "get_matrix_rules",
     "get_rule_filter_options",
     "make_rule_distribution_figure",
