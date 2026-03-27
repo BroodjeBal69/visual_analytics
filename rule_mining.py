@@ -180,23 +180,41 @@ def build_plot_rules(rules_df: pd.DataFrame | None = None, limit: int = PLOT_RUL
     ranked_rules = active_rules.copy()
     ranked_rules["rule_len"] = ranked_rules["antecedents"].apply(len)
 
-    plot_rules = ranked_rules[
-        (ranked_rules["lift"] > 1.0) &
-        (ranked_rules["confidence"] >= 0.75) &
-        (ranked_rules["rule_len"] <= 3)
+    # Separate rules by outcome for different filtering strategies
+    target_1_rules = ranked_rules[ranked_rules["consequents"].apply(lambda items: items == ["target=1"])]
+    target_0_rules = ranked_rules[ranked_rules["consequents"].apply(lambda items: items == ["target=0"])]
+
+    # Filter both outcomes, but be more inclusive with disease rules (lower confidence threshold)
+    # since disease detection is clinically important even at moderate confidence levels
+    filtered_target_1 = target_1_rules[
+        (target_1_rules["lift"] > 1.0) &
+        (target_1_rules["confidence"] > 0.50) &  # Higher than 50% for disease rules
+        (target_1_rules["rule_len"] <= 3)
     ].copy()
 
-    if plot_rules.empty:
-        plot_rules = ranked_rules.copy()
+    filtered_target_0 = target_0_rules[
+        (target_0_rules["lift"] > 1.0) &
+        (target_0_rules["confidence"] >= 0.75) &  # Higher threshold for non-disease rules
+        (target_0_rules["rule_len"] <= 3)
+    ].copy()
 
-    # Guarantee both outcomes are represented when available in the source rules.
-    for outcome in (["target=1"], ["target=0"]):
-        has_outcome = plot_rules["consequents"].apply(lambda items: items == outcome).any()
-        if has_outcome:
-            continue
-        fallback = ranked_rules[ranked_rules["consequents"].apply(lambda items: items == outcome)]
-        if not fallback.empty:
-            plot_rules = pd.concat([plot_rules, fallback.head(10)], ignore_index=True)
+    # Combine filtered rules
+    plot_rules = pd.concat([filtered_target_1, filtered_target_0])
+
+    # If either outcome is completely missing, add fallback rules (but filtered for quality)
+    if filtered_target_1.empty and not target_1_rules.empty:
+        fallback_1 = target_1_rules[
+            (target_1_rules["lift"] > 0.9) &
+            (target_1_rules["confidence"] > 0.50)
+        ].sort_values(by=["lift", "confidence", "support"], ascending=False).head(15)
+        plot_rules = pd.concat([plot_rules, fallback_1])
+
+    if filtered_target_0.empty and not target_0_rules.empty:
+        fallback_0 = target_0_rules[
+            (target_0_rules["lift"] > 0.9) &
+            (target_0_rules["confidence"] >= 0.60)
+        ].sort_values(by=["lift", "confidence", "support"], ascending=False).head(15)
+        plot_rules = pd.concat([plot_rules, fallback_0])
 
     plot_rules = (
         plot_rules
@@ -222,10 +240,14 @@ def build_plot_rules(rules_df: pd.DataFrame | None = None, limit: int = PLOT_RUL
     if positive_sorted.empty or negative_sorted.empty:
         return sorted_rules.head(limit).reset_index(drop=True)
 
-    quota = max(1, limit // 2)
+    # Balance outcomes: give priority to disease rules since they're clinically important
+    # Use 55/45 split in favor of disease detection rules
+    quota_disease = max(2, int(limit * 0.55))
+    quota_non_disease = max(2, limit - quota_disease)
+
     balanced = pd.concat([
-        positive_sorted.head(quota),
-        negative_sorted.head(quota),
+        positive_sorted.head(quota_disease),
+        negative_sorted.head(quota_non_disease),
     ])
 
     if len(balanced) < limit:

@@ -517,6 +517,10 @@ def make_population_distribution_view_figure(
     plot_df = data.copy()
     plot_df["Outcome"] = plot_df["target"].map({0: "No Disease", 1: "Disease"})
     matched_ids = set(matched_patient_ids or [])
+    
+    # Pre-compute matched_patient_df once, outside the loop
+    matched_patient_df = plot_df.loc[plot_df.index.isin(matched_ids)] if matched_ids else pd.DataFrame()
+    
     fig = make_subplots(
         rows=1,
         cols=len(selected_features),
@@ -556,19 +560,24 @@ def make_population_distribution_view_figure(
                     col=idx,
                 )
 
-            if matched_ids:
-                matched_values = plot_df.loc[plot_df.index.isin(matched_ids), selected_feature].dropna().tolist()
-                for value in matched_values:
-                    fig.add_vline(
-                        x=float(value),
-                        line_color="#4b5563",
-                        line_width=1.1,
-                        opacity=0.28,
-                        layer="above",
-                        row=1,
-                        col=idx,
-                    )
+            if matched_ids and not matched_patient_df.empty:
+                # Use a binned approach instead of individual vlines for better performance
+                matched_values = matched_patient_df[selected_feature].dropna()
+                if len(matched_values) > 0:
+                    # Add a single shape for the range instead of individual lines
+                    bin_edges = np.histogram_bin_edges(matched_values, bins=12)
+                    for edge in bin_edges[:-1]:
+                        fig.add_vline(
+                            x=float(edge),
+                            line_color="#4b5563",
+                            line_width=0.8,
+                            opacity=0.15,
+                            layer="above",
+                            row=1,
+                            col=idx,
+                        )
         else:
+            # Pre-compute counts for this feature once
             counts = (
                 plot_df.groupby([selected_feature, "Outcome"], dropna=False)
                 .size()
@@ -593,9 +602,10 @@ def make_population_distribution_view_figure(
                     col=idx,
                 )
 
-            if matched_ids:
+            if matched_ids and not matched_patient_df.empty:
+                # Pre-compute matched counts for this feature
                 matched_counts = (
-                    plot_df.loc[plot_df.index.isin(matched_ids)]
+                    matched_patient_df
                     .groupby([selected_feature, "Outcome"], dropna=False)
                     .size()
                     .reset_index(name="count")
