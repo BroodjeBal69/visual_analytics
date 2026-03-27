@@ -45,7 +45,7 @@ def _aggregate_shap_values(feature_names, shap_values, raw_columns):
         aggregated[raw_feature] = aggregated.get(raw_feature, 0.0) + float(shap_value)
     return aggregated
 
-
+# ====== SHAP Explanation Logic for Clinical Summary ======
 def compute_prediction_and_shap(model, patient_df: pd.DataFrame):
     """Return prediction probability and feature-level SHAP values for one patient."""
     try:
@@ -102,7 +102,7 @@ def compute_prediction_and_shap(model, patient_df: pd.DataFrame):
 
     return probability, base_value, shap_df
 
-
+# ====== Build SHAP figure for clinical summary ======
 def make_shap_figure(model, patient_df: pd.DataFrame) -> go.Figure:
     """Create a Plotly bar chart showing feature contributions."""
     try:

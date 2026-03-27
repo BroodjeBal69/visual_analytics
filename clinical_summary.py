@@ -38,7 +38,7 @@ def _build_shap_explanation(patient_df):
         ]
     )
 
-
+# ====== Build clinical summary insights for a patient ======
 def build_clinical_summary(patient_df, probability, gam_probability):
     patient_input = patient_df.iloc[0].to_dict()
     ranked_rules = get_ranked_rules_for_patient(patient_input, build_plot_rules(RULES_DF))

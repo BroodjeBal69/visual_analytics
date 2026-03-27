@@ -17,7 +17,7 @@ CATEGORICAL_BADGE_LABELS = {
     "slope": slope_map,
 }
 
-# # ===== Parallel Coordinates Plot Feature Badges =====
+# # ===== Reusable UI components =====
 def slider_marks(data, column_name):
     min_value = float(data[column_name].min())
     max_value = float(data[column_name].max())

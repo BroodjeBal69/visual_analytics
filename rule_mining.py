@@ -21,6 +21,8 @@ from palette import (
 )
 
 
+# ===== CONFIGURATION: Binning and Feature Mapping =====
+# Initialize bins and labels for discretization
 AGE_BINS = [-math.inf, 45, 55, 65, math.inf]
 AGE_LABELS = ["<45", "45-54", "55-64", "65+"]
 TRESTBPS_BINS = [-math.inf, 120, 140, 160, math.inf]
@@ -56,7 +58,7 @@ ITEM_LABELS = {
 }
 
 VALUE_LABEL_MAPS = {
-    "sex": {0: "Female", 1: "Male", "0": "Female", "1": "Male", "F": "Female", "M": "Male"},
+    "sex": {0: "Female", 1: "Male", "0": "Female", "1": "Male"},
     "cp": cp_map,
     "fbs": {0: "<= 120 mg/dl", 1: "> 120 mg/dl", "0": "<= 120 mg/dl", "1": "> 120 mg/dl"},
     "restecg": restecg_map,
@@ -81,6 +83,7 @@ FEATURE_LABELS = {
 }
 
 
+# ===== Base rules on traning set ======
 def _build_train_rule_source_df() -> pd.DataFrame:
     train_df = X_train.copy()
     train_df["target"] = y_train
@@ -90,6 +93,8 @@ def _build_train_rule_source_df() -> pd.DataFrame:
 TRAIN_RULE_SOURCE_DF = _build_train_rule_source_df()
 
 
+# ===== Binning and Feature Encoding =====
+# Functions for binning continuous variables and discretizing dataframes
 def _cut_value(value, bins, labels) -> str:
     if pd.isna(value):
         return "Unknown"
@@ -138,7 +143,6 @@ def build_rule_dataset(df: pd.DataFrame | None = None) -> pd.DataFrame:
 
 def _build_discretized_rule_source_df() -> pd.DataFrame:
     discretized = discretize_dataframe(TRAIN_RULE_SOURCE_DF)
-    discretized = discretized.copy()
     discretized["patient_id"] = TRAIN_RULE_SOURCE_DF.index.astype(int)
     return discretized
 
@@ -146,6 +150,8 @@ def _build_discretized_rule_source_df() -> pd.DataFrame:
 DISCRETIZED_RULE_SOURCE_DF = _build_discretized_rule_source_df()
 
 
+# ===== RULE MINING: Apriori Algorithm and Rule Construction =====
+# Build and filter association rules from training data
 def build_rules(
     df: pd.DataFrame | None = None,
     min_support: float = 0.05,
@@ -180,12 +186,12 @@ def build_plot_rules(rules_df: pd.DataFrame | None = None, limit: int = PLOT_RUL
     ranked_rules = active_rules.copy()
     ranked_rules["rule_len"] = ranked_rules["antecedents"].apply(len)
 
-    # Separate rules by outcome for different filtering strategies
+    # Separate rules by outcome 
     target_1_rules = ranked_rules[ranked_rules["consequents"].apply(lambda items: items == ["target=1"])]
     target_0_rules = ranked_rules[ranked_rules["consequents"].apply(lambda items: items == ["target=0"])]
 
-    # Filter both outcomes, but be more inclusive with disease rules (lower confidence threshold)
-    # since disease detection is clinically important even at moderate confidence levels
+    # Filter both outcomes, but be more inclusive with disease rules (lower confidence threshold) 
+    # -> high stake domain
     filtered_target_1 = target_1_rules[
         (target_1_rules["lift"] > 1.0) &
         (target_1_rules["confidence"] > 0.50) &  # Higher than 50% for disease rules
@@ -260,6 +266,7 @@ def build_plot_rules(rules_df: pd.DataFrame | None = None, limit: int = PLOT_RUL
 PLOT_RULES_DF = build_plot_rules(RULES_DF)
 
 
+# ===== RULE MATCHING & RANKING: Patient-Specific Rule Selection =====
 def filter_rules_by_outcome(rules_df: pd.DataFrame | None = None, outcome_mode: str = "all") -> pd.DataFrame:
     active_rules = RULES_DF if rules_df is None else rules_df.copy()
     if active_rules.empty or outcome_mode == "all":
@@ -379,6 +386,26 @@ def _build_rule_sentence(rule: dict):
     return html.Div(parts, className="mb-2")
 
 
+def _build_rule_card(row: pd.Series, rule_index: int | None = None) -> dbc.Card:
+    """Build a single rule card from a rule row. If rule_index is None, no index is shown."""
+    rule = rule_to_text(row)
+    title = f"Rule {rule_index + 1}" if rule_index is not None else "Selected Rule"
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H6(title, className="card-title"),
+                _build_rule_sentence(rule),
+                html.Small(
+                    f"Support: {rule['support']:.2f} | "
+                    f"Confidence: {rule['confidence']:.2f} | "
+                    f"Lift: {rule['lift']:.2f}"
+                ),
+            ]
+        ),
+        className="mb-2 shadow-sm",
+    )
+
+
 def build_rule_detail_card(row: pd.Series, label: str | None = None):
     rule = rule_to_text(row)
     title = "Selected Rule" if label is None else label
@@ -407,27 +434,7 @@ def get_ranked_rules_for_patient(patient_input: dict, rules_df: pd.DataFrame | N
 def build_rule_cards(ranked_rules: pd.DataFrame, top_n: int = 3):
     if ranked_rules.empty:
         return dbc.Alert("No strong matching rules found for this patient.", color="secondary")
-
-    cards = []
-    for index, (_, row) in enumerate(ranked_rules.head(top_n).iterrows(), start=1):
-        rule = rule_to_text(row)
-        cards.append(
-            dbc.Card(
-                dbc.CardBody(
-                    [
-                        html.H6(f"Rule {index}", className="card-title"),
-                        _build_rule_sentence(rule),
-                        html.Small(
-                            f"Confidence: {rule['confidence']:.2f} | "
-                            f"Lift: {rule['lift']:.2f} | "
-                            f"Support: {rule['support']:.2f}"
-                        ),
-                    ]
-                ),
-                className="mb-2 shadow-sm",
-            )
-        )
-    return cards
+    return [_build_rule_card(row, idx) for idx, (_, row) in enumerate(ranked_rules.head(top_n).iterrows())]
 
 
 def build_selected_rule_details(rules_df: pd.DataFrame, selected_indices: list[int] | None):
@@ -443,26 +450,52 @@ def build_selected_rule_details(rules_df: pd.DataFrame, selected_indices: list[i
         if rule_index < 0 or rule_index >= len(rules_df):
             continue
         row = rules_df.iloc[rule_index]
-        rule = rule_to_text(row)
-        cards.append(
-            dbc.Card(
-                dbc.CardBody(
-                    [
-                        html.H6(f"Rule {rule_index + 1}", className="card-title"),
-                        _build_rule_sentence(rule),
-                        html.Small(
-                            f"Support: {rule['support']:.2f} | "
-                            f"Confidence: {rule['confidence']:.2f} | "
-                            f"Lift: {rule['lift']:.2f}"
-                        ),
-                    ]
-                ),
-                className="mb-2 shadow-sm",
-            )
-        )
+        cards.append(_build_rule_card(row, rule_index))
     return cards or dbc.Alert("No valid rules selected.", color="light", className="mb-0")
 
 
+def _rule_signature(row) -> tuple:
+    return (
+        tuple(row["antecedents"]),
+        tuple(row["consequents"]),
+        round(float(row["support"]), 6),
+        round(float(row["confidence"]), 6),
+        round(float(row["lift"]), 6),
+    )
+
+
+def get_patient_rule_selection(
+    patient_input: dict,
+    selected_rule_filters: list[str] | None,
+    col_sort: str,
+    rule_count: int,
+    top_n: int = 5,
+) -> list[int]:
+    filtered_rules = filter_rules_by_antecedents(
+        build_plot_rules(RULES_DF),
+        selected_rule_filters,
+    )
+    matrix_rules = get_matrix_rules(filtered_rules, top_n=rule_count, col_sort=col_sort)
+    if matrix_rules.empty:
+        return []
+
+    ranked = get_ranked_rules_for_patient(patient_input, rules_df=matrix_rules)
+    if ranked.empty:
+        return []
+
+    selected_signatures = {
+        _rule_signature(row)
+        for _, row in ranked.head(top_n).iterrows()
+    }
+
+    selected_indices = []
+    for idx, row in matrix_rules.reset_index(drop=True).iterrows():
+        if _rule_signature(row) in selected_signatures:
+            selected_indices.append(int(idx))
+    return sorted(selected_indices)
+
+
+# ===== VISUALIZATION: Rule Tables and Charts =====
 def build_top_rules_table_data(rules_df: pd.DataFrame | None = None, limit: int = 50) -> pd.DataFrame:
     active_rules = PLOT_RULES_DF if rules_df is None else rules_df.copy()
     if active_rules.empty:
@@ -489,29 +522,34 @@ def build_top_rules_table_data(rules_df: pd.DataFrame | None = None, limit: int 
     return pd.DataFrame(rows)
 
 
+def _add_empty_figure_annotation(fig: go.Figure, title: str, height: int = 320) -> go.Figure:
+    """Add standard empty rules annotation to a figure."""
+    fig.add_annotation(
+        text="No rules available for the current filter.",
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font={"size": 15},
+    )
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        height=height,
+        xaxis={"visible": False},
+        yaxis={"visible": False},
+        margin={"l": 20, "r": 20, "t": 50, "b": 20},
+    )
+    return fig
+
+
 def make_rules_lollipop_figure(rules_df: pd.DataFrame | None = None, limit: int = 20) -> go.Figure:
     active_rules = PLOT_RULES_DF if rules_df is None else rules_df.copy()
     fig = go.Figure()
 
     if active_rules.empty:
-        fig.add_annotation(
-            text="No rules available for the current filter.",
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font={"size": 15},
-        )
-        fig.update_layout(
-            title="Rule Lift Overview",
-            template="plotly_white",
-            height=320,
-            xaxis={"visible": False},
-            yaxis={"visible": False},
-            margin={"l": 20, "r": 20, "t": 50, "b": 20},
-        )
-        return fig
+        return _add_empty_figure_annotation(fig, "Rule Lift Overview", 320)
 
     top_rules = active_rules.sort_values(
         by=["lift", "confidence", "support"],
@@ -559,6 +597,8 @@ def make_rules_lollipop_figure(rules_df: pd.DataFrame | None = None, limit: int 
     return fig
 
 
+# ===== RULE MATRIX: Visualization Helpers and Layout =====
+# Helper functions for the association rule matrix visualization
 def _feature_from_item(item: str) -> str:
     return item.split("=", 1)[0] if "=" in item else item
 
@@ -633,22 +673,7 @@ def make_rule_matrix_figure(
     )
 
     if plot_rules.empty:
-        fig.add_annotation(
-            text="No rules available for the current filter.",
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font={"size": 15},
-        )
-        fig.update_layout(
-            title="Association Rule Matrix",
-            template="plotly_white",
-            height=320,
-            margin={"l": 20, "r": 20, "t": 50, "b": 20},
-        )
-        return fig
+        return _add_empty_figure_annotation(fig, "Association Rule Matrix", 320)
 
     row_membership = {}
     rule_metric_text = []
@@ -874,8 +899,8 @@ def make_rule_matrix_figure(
         title="Association Rule Matrix",
         template="plotly_white",
         height=min(RULE_FIG_MAX_HEIGHT, max(360, 28 * len(row_records) + 120)),
-        margin={"l": 150, "r": 20, "t": 70, "b": 30},
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.03, "x": 0},
+        margin={"l": 150, "r": 20, "t": 100, "b": 30},
+        legend={"orientation": "h", "yanchor": "top", "y": -0.08, "x": 0},
         clickmode="event+select",
         dragmode="select",
         hovermode="closest",
@@ -901,6 +926,8 @@ def make_rule_matrix_figure(
     return fig
 
 
+# ===== RULE FILTERING & PATIENT MATCHING: Advanced Queries =====
+# Functions for filtering rules by antecedents and finding matching patients
 def get_rule_filter_options(rules_df: pd.DataFrame | None = None) -> list[dict]:
     active_rules = PLOT_RULES_DF if rules_df is None else rules_df
     items = set()
@@ -969,6 +996,8 @@ def get_selected_rule_matching_patient_ids(
     return sorted(matched_patient_ids)
 
 
+# ===== RULE DISTRIBUTION: Bubble Chart Visualization =====
+# Functions for creating and formatting the rule distribution scatter plot
 def make_top_rules_bar_figure(ranked_rules: pd.DataFrame, top_n: int = 8) -> go.Figure:
     fig = go.Figure()
 
@@ -983,7 +1012,7 @@ def make_top_rules_bar_figure(ranked_rules: pd.DataFrame, top_n: int = 8) -> go.
             font={"size": 15},
         )
         fig.update_layout(
-            title="Top Rules",
+            title="Top Rules by Lift",
             template="plotly_white",
             height=360,
             xaxis={"visible": False},
@@ -1030,24 +1059,7 @@ def make_rule_distribution_figure(rules_df: pd.DataFrame | None = None) -> go.Fi
     fig = go.Figure()
 
     if active_rules.empty:
-        fig.add_annotation(
-            text="No association rules available.",
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font={"size": 15},
-        )
-        fig.update_layout(
-            title="Rule Distribution",
-            template="plotly_white",
-            height=560,
-            xaxis={"visible": False},
-            yaxis={"visible": False},
-            margin={"l": 20, "r": 20, "t": 50, "b": 20},
-        )
-        return fig
+        return _add_empty_figure_annotation(fig, "Rule Distribution", 560)
 
     plot_df = active_rules.copy()
     plot_df["rule_name"] = [f"Rule {idx + 1}" for idx in range(len(plot_df))]
@@ -1123,6 +1135,8 @@ def make_rule_distribution_figure(rules_df: pd.DataFrame | None = None) -> go.Fi
     return fig
 
 
+# ===== MODULE EXPORTS =====
+# API for rule mining functionality
 __all__ = [
     "RULES_DF",
     "PLOT_RULES_DF",
@@ -1139,7 +1153,6 @@ __all__ = [
     "get_rule_filter_options",
     "make_rule_distribution_figure",
     "make_rule_matrix_figure",
-    "make_rules_lollipop_figure",
     "make_top_rules_bar_figure",
     "discretize_dataframe",
     "discretize_patient",

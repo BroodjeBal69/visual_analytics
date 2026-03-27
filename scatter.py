@@ -14,12 +14,12 @@ RELATIONSHIP_NUMERIC_FEATURES = [
     col for col in data.columns if col != "target" and pd.api.types.is_numeric_dtype(data[col])
 ]
 
-
+# ===== Handle unlimited color groups with a default palette fallback =====
 def _default_discrete_map(groups: list[str]) -> dict[str, str]:
     base_colors = px.colors.qualitative.Safe
     return {group: base_colors[idx % len(base_colors)] for idx, group in enumerate(groups)}
 
-
+# ====== Build color scheme for scatter plot ======
 def _build_color_column(df: pd.DataFrame, color_by: str) -> tuple[pd.DataFrame, str, dict | None]:
     plot_df = df.copy()
     palette = None
@@ -45,7 +45,7 @@ def _build_color_column(df: pd.DataFrame, color_by: str) -> tuple[pd.DataFrame, 
 
     return plot_df, "Color Group", palette
 
-
+# ====== Indicator for similar patients and build scatter plot ======
 def make_feature_relationships_figure(
     x_feature: str,
     y_feature: str,

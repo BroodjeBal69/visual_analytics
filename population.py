@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from dash import html
 from plotly.subplots import make_subplots
 
+# ===== Imports ======
 from data import (
     cp_map,
     exang_map,
@@ -59,7 +60,6 @@ CLUSTER_PROFILE_FEATURES = [
     feature for feature in ["age", "trestbps", "chol", "thalach", "oldpeak"] if feature in RELATIONSHIP_NUMERIC_FEATURES
 ]
 
-
 def _nearest_patient_index(patient_input: dict) -> int | None:
     if data.empty:
         return None
@@ -76,7 +76,7 @@ def _nearest_patient_index(patient_input: dict) -> int | None:
         return None
     return int(distances.idxmin())
 
-
+# ===== Make population clusters ======
 def _build_clustered_population_df(n_clusters: int = 3) -> pd.DataFrame:
     labels, _, _ = assign_kmeans_clusters_with_pca(
         data,
@@ -99,7 +99,7 @@ def get_kmeans_cluster_options(n_clusters: int = 3) -> list[dict]:
     ]
     return options
 
-
+# ==== Build cluster figure ======
 def make_cluster_overview_figure(selected_cluster: int | str | None, n_clusters: int = 3):
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
     summary = (
@@ -137,7 +137,7 @@ def make_cluster_overview_figure(selected_cluster: int | str | None, n_clusters:
     )
     return fig
 
-
+# ==== Build explanation figure for cluster profile ======
 def make_cluster_profile_figure(selected_cluster: int | str | None, n_clusters: int = 3):
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
     if selected_cluster is None or str(selected_cluster) == "all":
@@ -201,7 +201,7 @@ def make_cluster_profile_figure(selected_cluster: int | str | None, n_clusters: 
     )
     return fig
 
-
+# ==== Plot population distribution figure ======
 def make_cluster_pca_figure(
     selected_cluster: int | str | None,
     color_by: str = "cluster",
@@ -348,7 +348,7 @@ def make_cluster_pca_figure(
     )
     return fig
 
-
+# ===== Build cluster explanation summary for interpretation ======
 def make_cluster_explanation_summary(selected_cluster: int | str | None, n_clusters: int = 3) -> list:
     clustered = _build_clustered_population_df(n_clusters=n_clusters)
     if selected_cluster is None or str(selected_cluster) == "all":
@@ -650,7 +650,7 @@ def make_population_distribution_view_figure(
     )
     return fig
 
-
+# ==== Insight alert figure =====
 def make_feature_relationships_summary(x_feature: str, y_feature: str) -> list:
     x_col = x_feature if x_feature in RELATIONSHIP_NUMERIC_FEATURES else RELATIONSHIP_NUMERIC_FEATURES[0]
     y_col = y_feature if y_feature in RELATIONSHIP_NUMERIC_FEATURES else (
@@ -691,7 +691,7 @@ def make_feature_relationships_summary(x_feature: str, y_feature: str) -> list:
         html.Div(clinical_note, className="small text-muted"),
     ]
 
-
+# ==== Make DF for similar patients and summary stats for population context section =====
 def build_population_context(patient_input, selected_features=None):
     distance = 0
     for feature in SIMILARITY_NUMERIC_FEATURES:
@@ -713,13 +713,24 @@ def build_population_context(patient_input, selected_features=None):
 
     similar_records = [
         {
+            "patient_id": int(index),
             "age": int(row.age),
             "sex": format_display_value("sex", row.sex),
             "cp": format_display_value("cp", row.cp),
             "exang": format_display_value("exang", row.exang),
             "target": format_display_value("target", row.target),
+            "sex_raw": row.sex,
+            "cp_raw": row.cp,
+            "trestbps_raw": float(row.trestbps),
+            "chol_raw": float(row.chol),
+            "fbs_raw": row.fbs,
+            "restecg_raw": row.restecg,
+            "thalach_raw": float(row.thalach),
+            "exang_raw": row.exang,
+            "oldpeak_raw": float(row.oldpeak),
+            "slope_raw": row.slope,
         }
-        for row in similar_patients.itertuples()
+        for index, row in similar_patients.iterrows()
     ]
 
     return summary, similar_records, build_population_distribution_figure(patient_input, selected_features)

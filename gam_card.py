@@ -42,7 +42,7 @@ GAM_CATEGORY_LABELS = {
 GAM_REFERENCE_DATA = load_data()[gam_features]
 GAM_CATEGORICAL_DEFAULTS = {}
 
-
+# Precompute reference data and default values for categorical features based on the dataset.
 def _safe_numeric_mode(series: pd.Series, fallback: int = 0) -> int:
     cleaned = series.dropna()
     if cleaned.empty:
@@ -52,7 +52,7 @@ def _safe_numeric_mode(series: pd.Series, fallback: int = 0) -> int:
         return fallback
     return int(modes.iloc[0])
 
-
+# Coerce GAM reference data to numeric and compute defaults for categorical features
 for feature in gam_numeric_features:
     GAM_REFERENCE_DATA[feature] = pd.to_numeric(GAM_REFERENCE_DATA[feature], errors="coerce").astype(float)
 for feature in gam_categorical_features:
@@ -74,7 +74,7 @@ def _coerce_gam_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         )
     return coerced
 
-
+# ====== Build reference row for GAM partial dependence calculations ======
 def _gam_reference_row() -> pd.DataFrame:
     reference_values = {}
     for feature in gam_features:
@@ -85,7 +85,7 @@ def _gam_reference_row() -> pd.DataFrame:
             reference_values[feature] = float(series.median())
     return _coerce_gam_dataframe(pd.DataFrame([reference_values], columns=gam_features))
 
-
+# ====== Build categorical effect frame for GAM features ======
 def _categorical_effect_frame(feature: str, term_index: int) -> pd.DataFrame:
     reference_df = _gam_reference_row()
     values = sorted(GAM_REFERENCE_DATA[feature].dropna().unique().tolist())
@@ -103,13 +103,13 @@ def _categorical_effect_frame(feature: str, term_index: int) -> pd.DataFrame:
         )
     return pd.DataFrame(rows)
 
-
+# ====== Patient dataframe for GAM predictions and explanations ======
 def build_gam_dataframe(patient_input: dict) -> pd.DataFrame:
     """Return the subset of fields used by the GAM model."""
     row = {feature: patient_input.get(feature) for feature in gam_features}
     return _coerce_gam_dataframe(pd.DataFrame([row]))
 
-
+# Predicts the risk for a single patient
 def predict_gam_risk(patient_df: pd.DataFrame):
     """Return the GAM risk probability for a single patient."""
     if model_gam is None:
@@ -117,7 +117,7 @@ def predict_gam_risk(patient_df: pd.DataFrame):
     gam_df = _coerce_gam_dataframe(patient_df)
     return float(model_gam.predict_proba(gam_df.to_numpy(dtype=float))[0])
 
-
+# Plots partial effects of GAM
 def make_gam_figure(patient_df: pd.DataFrame, selected_features: list[str] | None = None) -> go.Figure:
     """Plot GAM partial effects with the patient's current values highlighted."""
     if model_gam is None:

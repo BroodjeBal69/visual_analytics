@@ -10,7 +10,6 @@ import population as population_module
 import rule_mining as rule_mining_module
 import shap_card as shap_card_module
 import gam_card as gam_card_module
-import radar_card as radar_card_module
 
 from gam_card import build_gam_dataframe, predict_gam_risk, make_gam_figure
 from data import load_data
@@ -35,6 +34,7 @@ from population import (
 from rule_mining import (
     build_rule_cards,
     build_rule_detail_card,
+    get_patient_rule_selection,
     get_ranked_rules_for_patient,
     build_selected_rule_details,
     build_top_rules_table_data,
@@ -59,13 +59,7 @@ POPULATION_GRAPH_HEIGHT = "40vh"
 RULE_MATRIX_GRAPH_HEIGHT = "78vh"
 POPULATION_VIEW_DISTRIBUTION_HEIGHT = "48vh"
 
-def risk_color(probability):
-    probability = max(0.0, min(1.0, float(probability)))
-    red = int(255 * probability)
-    green = int(160 * (1 - probability))
-    return f"rgb({red}, {green}, 60)"
-
-
+# Switches between color modes and applies the selected palette to all modules
 def sync_palette_mode(mode: str | None) -> str:
     resolved_mode = palette_module.apply_palette_mode(mode)
 
@@ -76,6 +70,7 @@ def sync_palette_mode(mode: str | None) -> str:
     population_module.DEEMPHASIS_GREY = palette_module.DEEMPHASIS_GREY
     population_module.DISEASE_COLOR_MAP = palette_module.DISEASE_COLOR_MAP
     population_module.CLUSTER_COLOR_MAP = palette_module.CLUSTER_COLOR_MAP
+    population_module.DIVERGING_COLOR_SCALE = palette_module.DIVERGING_COLOR_SCALE
     population_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
     population_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
     population_module.POSITIVE_COLOR = palette_module.POSITIVE_COLOR
@@ -98,57 +93,13 @@ def sync_palette_mode(mode: str | None) -> str:
     gam_card_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
     gam_card_module.POSITIVE_COLOR = palette_module.POSITIVE_COLOR
 
-    radar_card_module.NEGATIVE_COLOR = palette_module.NEGATIVE_COLOR
-    radar_card_module.PATIENT_COLOR = palette_module.PATIENT_COLOR
-
     return resolved_mode
 
 
 def color_mode_tokens(mode: str | None) -> dict[str, str]:
     return palette_module.get_palette_tokens(mode)
 
-
-def _rule_signature(row) -> tuple:
-    return (
-        tuple(row["antecedents"]),
-        tuple(row["consequents"]),
-        round(float(row["support"]), 6),
-        round(float(row["confidence"]), 6),
-        round(float(row["lift"]), 6),
-    )
-
-
-def get_patient_rule_selection(
-    patient_input: dict,
-    selected_rule_filters: list[str] | None,
-    col_sort: str,
-    rule_count: int,
-    top_n: int = 5,
-) -> list[int]:
-    filtered_rules = filter_rules_by_antecedents(
-        build_plot_rules(RULES_DF),
-        selected_rule_filters,
-    )
-    matrix_rules = get_matrix_rules(filtered_rules, top_n=rule_count, col_sort=col_sort)
-    if matrix_rules.empty:
-        return []
-
-    ranked = get_ranked_rules_for_patient(patient_input, rules_df=matrix_rules)
-    if ranked.empty:
-        return []
-
-    selected_signatures = {
-        _rule_signature(row)
-        for _, row in ranked.head(top_n).iterrows()
-    }
-
-    selected_indices = []
-    for idx, row in matrix_rules.reset_index(drop=True).iterrows():
-        if _rule_signature(row) in selected_signatures:
-            selected_indices.append(int(idx))
-    return sorted(selected_indices)
-
-
+# ==== INIT all modules ======
 sync_palette_mode(palette_module.DEFAULT_PALETTE_MODE)
 
 initial_shap_figure = make_shap_figure(model_rf, build_patient_dataframe(default_patient_input),)
@@ -200,13 +151,7 @@ initial_cluster_pca_figure = make_cluster_pca_figure(
 initial_cluster_profile_figure = make_cluster_profile_figure(initial_selected_cluster, n_clusters=3)
 initial_cluster_summary = make_cluster_explanation_summary(initial_selected_cluster, n_clusters=3)
 
-# Get model performance metrics
-performance_metrics = {
-    "Random Forest Accuracy": rf_accuracy,
-    "Random Forest AUC": rf_auc,
-    "GAM Accuracy": gam_accuracy,
-    "GAM AUC": gam_auc,
-}
+initial_cluster_options = get_kmeans_cluster_options(n_clusters=3)
 
 # ========= App ===========
 
@@ -289,10 +234,6 @@ app.layout = dbc.Container([
                         ],
                         className="g-3",
                     ),
-                    html.Div(id="predicted-risk-value", style={"display": "none"}),
-                    html.Div(id="risk-category-value", style={"display": "none"}),
-                    html.Div(id="rf-gam-agreement", style={"display": "none"}),
-                    html.Div(id="model-metrics-value", style={"display": "none"}),
                 ]
             ),
         ],
@@ -374,9 +315,18 @@ app.layout = dbc.Container([
                                 columns=SIMILAR_PATIENT_COLUMNS,
                                 data=initial_similar_patients,
                                 page_size=8,
+                                row_selectable="single",
+                                selected_rows=[],
                                 style_table={"overflowX": "auto"},
                                 style_cell={"textAlign": "left", "fontSize": "0.9rem", "padding": "0.5rem"},
                                 style_header={"fontWeight": "600"},
+                                style_data_conditional=[
+                                    {
+                                        "if": {"state": "selected"},
+                                        "backgroundColor": "rgba(13, 110, 253, 0.12)",
+                                        "border": "1px solid rgba(13, 110, 253, 0.35)",
+                                    }
+                                ],
                             ),
                         ], width=4),
                         dbc.Col([
@@ -413,11 +363,12 @@ app.layout = dbc.Container([
     html.Div(
         [
             dbc.Card([
-                dbc.CardHeader(html.H2("Population View", className="mb-0"), className='bg-light'),
+                dbc.CardHeader(html.H2("Decision making rules", className="mb-0"), className='bg-light'),
                 dbc.CardBody([
                     html.H4("Rule Explanation", className="mb-3"),
                     dbc.Row([
                         dbc.Col([
+                            # ===== Rule matrix and controls ======
                             html.H5("Association Rule Matrix", className="mb-3"),
                             dcc.Graph(
                                 id="population-rule-matrix-graph",
@@ -429,7 +380,7 @@ app.layout = dbc.Container([
                         ], width=8),
                         dbc.Col([
                             dbc.Alert(
-                                [
+                                [ # ===== Interactive rule builder and filters ======
                                     dbc.Label("Rule Builder", className="fw-semibold"),
                                     dbc.Row(
                                         [
@@ -479,6 +430,7 @@ app.layout = dbc.Container([
                                         ],
                                         className="g-2 mb-2",
                                     ),
+                                    # Filtering logic
                                     html.Div(id="rule-builder-active", className="mb-3"),
                                     dbc.Label("Filter by attribute values", className="fw-semibold"),
                                     dcc.Dropdown(
@@ -596,10 +548,12 @@ app.layout = dbc.Container([
                 ])
             ], className='mb-4'),
             dbc.Card([
+                # ==== Feature Relationships Card ====
                 dbc.CardHeader(html.H2("Feature Relationships", className="mb-0"), className='bg-light'),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
+                            # Interaction componentn combining different features
                             dbc.Label("X-axis feature", className="fw-semibold"),
                             dcc.Dropdown(
                                 id="relationship-x-feature",
@@ -642,6 +596,12 @@ app.layout = dbc.Container([
                                 ],
                                 value=[],
                                 inputStyle={"marginRight": "0.35rem", "marginLeft": "0.5rem"},
+                                className="mb-3",
+                            ),
+                            dbc.Alert(
+                                initial_relationship_summary,
+                                id="feature-relationships-summary",
+                                color="light",
                                 className="mb-0",
                             ),
                         ], width=3),
@@ -653,19 +613,12 @@ app.layout = dbc.Container([
                                 responsive=True,
                                 style={"height": POPULATION_VIEW_DISTRIBUTION_HEIGHT},
                             ),
-                        ], width=7),
-                        dbc.Col([
-                            dbc.Alert(
-                                initial_relationship_summary,
-                                id="feature-relationships-summary",
-                                color="light",
-                                className="mb-0",
-                            ),
-                        ], width=2),
+                        ], width=9),
                     ], className="g-3"),
                 ])
             ], className='mb-4'),
             dbc.Card([
+                # ==== Cluster Explanation Card ====
                 dbc.CardHeader(html.H2("Cluster Explanation (KMeans)", className="mb-0"), className='bg-light'),
                 dbc.CardBody([
                     dbc.Row([
@@ -733,15 +686,39 @@ def register_categorical_badge_callback(field_name):
     @app.callback(
         Output(f"input-{field_name}", "data"),
         [Output({"type": f"{field_name}-badge", "value": value}, "className") for value in values],
-        [Input({"type": f"{field_name}-badge", "value": value}, "n_clicks") for value in values] + [Input("reset-patient-button", "n_clicks")],
+        [Input({"type": f"{field_name}-badge", "value": value}, "n_clicks") for value in values]
+        + [
+            Input("reset-patient-button", "n_clicks"),
+            Input("similar-patients-table", "selected_rows"),
+        ],
+        State("similar-patients-table", "data"),
         prevent_initial_call=False,
     )
-    def update_categorical_badges(*_):
+    def update_categorical_badges(*args):
+        table_rows = args[-1] if args else None
         triggered = ctx.triggered_id
         if triggered is None or triggered == "reset-patient-button":
             selected = default_patient_input[field_name]
+        elif triggered == "similar-patients-table":
+            selected_rows = ctx.triggered[0].get("value") if ctx.triggered else None
+            if selected_rows and table_rows:
+                row_index = int(selected_rows[0])
+                if 0 <= row_index < len(table_rows):
+                    raw_key = f"{field_name}_raw"
+                    row_data = table_rows[row_index]
+                    selected = row_data.get(raw_key, row_data.get(field_name, default_patient_input[field_name]))
+                else:
+                    selected = default_patient_input[field_name]
+            else:
+                selected = default_patient_input[field_name]
         else:
             selected = triggered["value"]
+
+        if selected not in values:
+            selected_str = str(selected)
+            matched = next((value for value in values if str(value) == selected_str), None)
+            selected = matched if matched is not None else default_patient_input[field_name]
+
         classes = [
             badge_class(value == selected, "me-2 mb-2")
             for value in values
@@ -762,9 +739,24 @@ for categorical_field in CATEGORICAL_BADGE_LABELS:
     Output("input-thalach", "value"),
     Output("input-oldpeak", "value"),
     Input("reset-patient-button", "n_clicks"),
+    Input("similar-patients-table", "selected_rows"),
+    State("similar-patients-table", "data"),
     prevent_initial_call=True,
 )
-def reset_patient_numeric_inputs(_n_clicks):
+def reset_patient_numeric_inputs(_n_clicks, selected_rows, table_rows):
+    triggered = ctx.triggered_id
+    if triggered == "similar-patients-table" and selected_rows and table_rows:
+        row_index = int(selected_rows[0])
+        if 0 <= row_index < len(table_rows):
+            row_data = table_rows[row_index]
+            return (
+                int(row_data.get("age", default_patient_input["age"])),
+                float(row_data.get("trestbps_raw", default_patient_input["trestbps"])),
+                float(row_data.get("chol_raw", default_patient_input["chol"])),
+                float(row_data.get("thalach_raw", default_patient_input["thalach"])),
+                float(row_data.get("oldpeak_raw", default_patient_input["oldpeak"])),
+            )
+
     return (
         int(default_patient_input["age"]),
         float(default_patient_input["trestbps"]),
@@ -867,11 +859,24 @@ def apply_color_mode(color_mode):
 
 
 @app.callback(
-    Output("predicted-risk-value", "children"),
-    Output("predicted-risk-value", "style"),
-    Output("risk-category-value", "children"),
-    Output("rf-gam-agreement", "children"),
-    Output("model-metrics-value", "children"),
+    Output("similar-patients-table", "selected_rows"),
+    Input("similar-patients-table", "active_cell"),
+    Input("reset-patient-button", "n_clicks"),
+    State("similar-patients-table", "data"),
+    prevent_initial_call=True,
+)
+def select_similar_patient_row(active_cell, _reset_clicks, table_rows):
+    if ctx.triggered_id == "reset-patient-button":
+        return []
+    if not active_cell or not table_rows:
+        return []
+    row_index = int(active_cell.get("row", -1))
+    if row_index < 0 or row_index >= len(table_rows):
+        return []
+    return [row_index]
+
+
+@app.callback(
     Output("prediction-summary", "children"),
     Output("shap-patient-graph", "figure"),
     Output("population-summary", "children"),
@@ -927,31 +932,13 @@ def update_shap_prediction(
     gam_df = build_gam_dataframe(patient_input)
     probability = float(model_rf.predict_proba(patient_df)[0, 1])
     gam_probability = predict_gam_risk(gam_df)
-    if probability >= 0.7:
-        risk_category = "High"
-    elif probability >= 0.4:
-        risk_category = "Moderate"
-    else:
-        risk_category = "Low"
 
-    agreement = "Unavailable"
-    if gam_probability is not None:
-        rf_positive = probability >= 0.5
-        gam_positive = gam_probability >= 0.5
-        agreement = "Agree" if rf_positive == gam_positive else "Disagree"
-
-    model_metrics = f"{rf_auc:.2f} / {rf_accuracy:.2f}"
     summary = build_clinical_summary(patient_df, probability, gam_probability)
     population_summary, similar_patients, population_figure = build_population_context(
         patient_input,
         selected_population_features,
     )
     return (
-        f"{probability:.1%}",
-        {"color": risk_color(probability)},
-        risk_category,
-        agreement,
-        model_metrics,
         summary,
         make_shap_figure(model_rf, patient_df),
         population_summary,
